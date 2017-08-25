@@ -105,7 +105,7 @@ def is_borrowable(identifiers, acs=False, restricted=False):
 
     """
     _acs = '1' if acs else '0'
-    _restricted = '1' if restricted else '0'
+    _restricted = '1' if restricted else '0'    
     url = (config_ia_availability_api_v1_url + '?action=availability&exact=%s&validate=%s'
            % (_acs, _restricted))
     data = urllib.urlencode({
@@ -119,6 +119,8 @@ def is_borrowable(identifiers, acs=False, restricted=False):
         return {'error': 'request_timeout'}
 
 def get_availability(key, ids):
+    print(ids)
+    print(key)
     url = '%s?%s=%s' % (config_ia_availability_api_v2_url, key, ','.join(ids))
     try:
         content = urllib2.urlopen(url=url, timeout=config_http_request_timeout).read()
@@ -126,21 +128,25 @@ def get_availability(key, ids):
     except Exception as e:
         return {'error': 'request_timeout'}
 
-def get_edition_availability(ol_edition_id):
-    return get_availability_of_editions([ol_edition_id])
+def get_edition_availability(edition_olid):
+    return get_availability_of_editions([edition_olid])[edition_olid]
 
-def get_availability_of_editions(ol_edition_ids):
+def get_availability_of_editions(edition_olids):
     """Given a list of Open Library edition IDs, returns a list of
     Availability v2 results.
     """
-    return get_availability('openlibrary_edition', ol_edition_ids)
+    return get_availability('openlibrary_edition', edition_olids)
 
 def get_availability_of_ocaid(ocaid):
     """Retrieves availability based on ocaid/archive.org identifier"""
-    return get_availability('identifier', [ocaid])
+    response = get_availability('identifier', [ocaid]) or {}
+    return response.get(ocaid)
 
-def get_availablility_of_works(ol_work_ids):
-    return get_availability('openlibrary_work', ol_work_ids)
+def get_availablility_of_works(work_olids):
+    return get_availability('openlibrary_work', work_olids)
+
+def get_work_availability(work_olid):
+    return get_availablility_of_works([work_olid])[work_olid]
 
 def is_loaned_out(identifier):
     """Returns True if the given identifier is loaned out.

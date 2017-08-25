@@ -3291,6 +3291,13 @@ li.searchResultItem {
     border-bottom:1px solid #f3f1ea;
 }
 
+.CTAbox {
+    border: 1px solid #eee;
+    background: #f3f3f3;
+    padding: 5px;
+    border-radius: 5px;
+}
+
 .searchResultItem .details {
     width: 100%;
     padding: 5px;
@@ -3359,6 +3366,22 @@ li.searchResultItem {
     margin-bottom: -1.5em;
     color: #757373;
     padding: .2em;
+}
+
+.cta-button {
+    border: none;
+    color: #fff;
+    width: 100%;
+    border: 0;
+    border-radius: 5px;
+    box-sizing: border-box;
+    color: #fff;
+    cursor: pointer;
+    text-decoration: none;
+    font-family: "Lucida Grande", Verdana, Geneva, Helvetica, Arial, sans-serif;
+    text-align: center;
+    padding: 5px 20px;
+    font-size: 0.8em;
 }
 
 div#searchResults .SRPCover {margin: 0 15px 20px 0;float:left;height:185px;vertical-align:middle;}
