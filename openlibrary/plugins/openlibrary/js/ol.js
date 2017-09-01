@@ -524,7 +524,7 @@ $().ready(function(){
         $('.instantsearch-mode').val(localStorage.getItem("mode"));
         $('input[name=mode][value=' + localStorage.getItem("mode") + ']')
             .attr('checked', 'true');
-        setMode('.olform');
+        setMode('.siteSearch');
         setMode('.search-bar-input');
     }
 
@@ -656,18 +656,18 @@ $().ready(function(){
     $('.search-mode').change(function() {
         $('html,body').css('cursor', 'wait');
         setSearchMode($(this).val());
-        if ($('.olform').length) {
-            $('.olform').submit();
+        if ($('.siteSearch').length) {
+            $('.siteSearch').submit();
         } else {
             location.reload();
         }
     });
 
-    $('.olform').submit(function() {
+    $('.siteSearch').submit(function() {
         if (localStorage.getItem('mode') !== 'everything') {
-            $('.olform').append('<input type="hidden" name="has_fulltext" value="true"/>');
+            $('.siteSearch').append('<input type="hidden" name="has_fulltext" value="true"/>');
         } if (localStorage.getItem('mode') === 'printdisabled') {
-            $('.olform').append('<input type="hidden" name="subject_facet" value="Protected DAISY"/>');
+            $('.siteSearch').append('<input type="hidden" name="subject_facet" value="Protected DAISY"/>');
         }
 
     });

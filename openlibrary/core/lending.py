@@ -119,8 +119,6 @@ def is_borrowable(identifiers, acs=False, restricted=False):
         return {'error': 'request_timeout'}
 
 def get_availability(key, ids):
-    print(ids)
-    print(key)
     url = '%s?%s=%s' % (config_ia_availability_api_v2_url, key, ','.join(ids))
     try:
         content = urllib2.urlopen(url=url, timeout=config_http_request_timeout).read()

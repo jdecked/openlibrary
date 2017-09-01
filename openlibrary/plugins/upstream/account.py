@@ -175,7 +175,7 @@ class account_migration(delegate.page):
                 password = OpenLibraryAccount.generate_random_password(16)
                 ia_account = InternetArchiveAccount.create(
                     ol_account.username or ol_account.displayname,
-                    ol_account.email, password, verified=True, retries=3)
+                    ol_account.email, password, verified=True, retries=5)
                 return delegate.RawText(simplejson.dumps({
                     'username': ol_account.username,
                     'email': ol_account.email,
