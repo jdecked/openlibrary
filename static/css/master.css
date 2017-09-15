@@ -6426,3 +6426,21 @@ form#addAuthor.olform .wmd-preview {
 .iconochive-First{}
 .iconochive-Invisible{}
 .iconochive-Computer{}
+
+.work-likes {
+
+}
+
+.work-likes input[type=submit] {
+    padding: 5px 10px;
+    border-radius: 5px;
+    border: 1px solid #999;
+}
+
+.work-likes input[type=submit].activated {
+    color: rgba(255, 38, 158, 0.78)
+}
+
+.work-likes input[type=submit].unactivated {
+    background-color: #fff;
+}
