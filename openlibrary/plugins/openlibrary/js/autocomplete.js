@@ -1,116 +1,54 @@
 // jquery plugins to provide author and language autocompletes.
 
 ;(function($) {
-    // author-autocomplete
-    $.fn.author_autocomplete = function(options) {
-        var local_options = {
-            minChars: 2,
-            max: 11,
-            addnew: true,
-            autoFill: false,
-            formatItem: function(item) {
-                var date = '';
-                if (item.key != "__new__") {
-                    if (item.birth_date || item.death_date) {
-                        date = ' (';
-                        if (item.birth_date) {
-                            date += item.birth_date;
-                        }
-                        date += '-';
-                        if (item.death_date) {
-                            date += item.death_date;
-                        }
-                        date += ' )';
-                    }
-                }
-                if (item.key == "__new__") {
-                    return '' +
-                        '<div class="ac_author ac_addnew" title="Add a new author">' +
-                            '<span class="action">' + _('Create a new record for') + '</span>' +
-                            '<span class="name">' + item.name + '</span>' +
-                        '</div>'
-                }
-                else if (item.work_count == 0) {
-                    return '<div class="ac_author" title="Select this author">' +
-                               '<span class="name">' + item['name'] + date + '</span>' +
-                               '<span class="subject">No books associated with ' + item['name'] +'</span>' +
-                           '</div>';
-                }
-                else if (item.work_count == 1) {
-                    return '<div class="ac_author" title="Select this author">' +
-                               '<span class="name">' + item['name'] + date + '</span>' +
-                               '<span class="books">1 book</span> <span class="work">titled <i>' + (item.works[0]) + '</i></span><br/>' +
-                               '<span class="subject">Subjects: ' + (item.subjects && item.subjects.join(", ") || "") + '</span>' +
-                           '</div>';
-                }
-                else {
-                    return '<div class="ac_author" title="Select this author">' +
-                               '<span class="name">' + item['name'] + date + '</span>' +
-                               '<span class="books">' + (item.work_count) + ' books</span>' +
-                               ' <span class="work">including <i>' + (item.works && item.works[0] || "") + '</i></span><br/>' +
-                               '<span class="subject">Subjects: ' + (item.subjects && item.subjects.join(", ") || "") + '</span>' +
-                           '</div>';
-                }
-            }
-        };
+    /**
+     * Some extra options for when creating an autocomplete input field
+     * @typedef {Object} OpenLibraryAutocompleteOptions
+     * @property{string} endpoint - url to hit for autocomplete results
+     * @property{(boolean|Function)} [addnew] - when (or whether) to display a "Create new record"
+     *     element in the autocomplete list. The function takes the query and should return a boolean.
+     *     a boolean.
+     */
 
-        $(this).each(function() {
-            setup_autocomplete(this, "/authors/_autocomplete", options, local_options);
-        });
-    }
-
-    // language-autocomplete
-    $.fn.language_autocomplete = function(options) {
-        var local_options = {
-            max: 6,
-            formatItem: function(item) {
-                return sprintf(
-                    '<div class="ac_author" title="%s"><span class="name">%s</span></div>',
-                    _("Select this language"),
-                    item.name);
-            }
-        };
-
-        $(this).each(function() {
-            setup_autocomplete(this, "/languages/_autocomplete", options, local_options);
-        });
-    }
-
-    function setup_autocomplete(_this, url, options, local_options) {
-        options = $.extend(options, local_options);
-
-        var default_options = {
+    /**
+     * @private
+     * @param{HTMLInputElement} _this - input element that will become autocompleting.
+     * @param{OpenLibraryAutocompleteOptions} ol_ac_opts
+     * @param{Object} ac_opts - options passed to $.autocomplete; see that.
+     */
+    function setup_autocomplete(_this, ol_ac_opts, ac_opts) {
+        var default_ac_opts = {
             autoFill: true,
             mustMatch: true,
+            formatMatch: function(item) { return item.name; },
             parse: function(text) {
-                var rows = eval(text).slice(0, options.max-1);
+                var rows = JSON.parse(text);
                 var parsed = [];
                 for (var i=0; i < rows.length; i++) {
                     var row = rows[i];
-                    parsed[parsed.length] = {
+                    parsed.push({
                         data: row,
                         value: row.name,
                         result: row.name
-                    };
+                    });
                 }
-                if (options.addnew) {
-                    // XXX: this won't work when _this is multiple values (like $("input"))
-                    var name = $(_this).val();
-                    parsed[parsed.length] = {
-                        data: {name: name, key: "__new__"},
-                        value: name,
-                        result: name
-                    }
+
+                // XXX: this won't work when _this is multiple values (like $("input"))
+                var query = $(_this).val();
+                if (ol_ac_opts.addnew && ol_ac_opts.addnew(query)) {
+                    parsed = parsed.slice(0, ac_opts.max - 1);
+                    parsed.push({
+                        data: {name: query, key: "__new__"},
+                        value: query,
+                        result: query
+                    });
                 }
                 return parsed;
             },
-            formatMatch: function(item) {
-                return item.name;
-            }
         };
 
         $(_this)
-            .autocomplete(url, $.extend(default_options, options))
+            .autocomplete(ol_ac_opts.endpoint, $.extend(default_ac_opts, ac_opts))
             .result(function(event, item) {
                 $("#" + this.id + "-key").val(item.key);
                 var $this = $(this);
@@ -128,4 +66,54 @@
                 $(this).removeClass("accept").removeClass("reject");
             });
     }
+
+    /**
+     * @this HTMLElement - the element that contains the different inputs.
+     * @param {string} autocomplete_selector - selector to find the input element use for autocomplete.
+     * @param {Function} input_renderer - ((index, item) -> html_string) render the ith div.input.
+     * @param {OpenLibraryAutocompleteOptions} ol_ac_opts
+     * @param {Object} ac_opts - options given to override defaults of $.autocomplete; see that.
+     */
+    $.fn.setup_multi_input_autocomplete = function(autocomplete_selector, input_renderer, ol_ac_opts, ac_opts) {
+        var container = $(this);
+
+        // first let's init any pre-existing inputs
+        container.find(autocomplete_selector).each(function() {
+            setup_autocomplete(this, ol_ac_opts, ac_opts);
+        });
+
+        function update_visible() {
+            if (container.find("div.input").length > 1) {
+                container.find("a.remove").show();
+            }
+            else {
+                container.find("a.remove").hide();
+            }
+
+            container.find("a.add:not(:last)").hide();
+            container.find("a.add:last").show();
+        }
+
+        update_visible();
+
+        container.find("a.remove").live("click", function() {
+            if (container.find("div.input").length > 1) {
+                $(this).closest("div.input").remove();
+                update_visible();
+            }
+        });
+
+        container.find("a.add").live("click", function(event) {
+            event.preventDefault();
+
+            var next_index = container.find("div.input").length;
+            var new_input = $(input_renderer(next_index, {key:"", name: ""}));
+            container.append(new_input);
+            setup_autocomplete(
+                new_input.find(autocomplete_selector)[0],
+                ol_ac_opts,
+                ac_opts);
+            update_visible();
+        });
+    };
 })(jQuery);

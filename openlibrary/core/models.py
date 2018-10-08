@@ -11,15 +11,16 @@ from infogami.infobase import client
 import helpers as h
 
 #TODO: fix this. openlibrary.core should not import plugins.
-from openlibrary.plugins.upstream.utils import get_history
-from openlibrary.plugins.upstream.account import Account
 from openlibrary import accounts
-from openlibrary.core import loanstats
+from openlibrary.utils import extract_numeric_id_from_olid
+from openlibrary.plugins.upstream.utils import get_history
 from openlibrary.core.helpers import private_collection_in
+from openlibrary.core.bookshelves import Bookshelves
+from openlibrary.core.ratings import Ratings
 
 # relative imports
 from lists.model import ListMixin, Seed
-from . import cache, iprange, inlibrary, waitinglist
+from . import db, cache, iprange, inlibrary, loanstats, waitinglist, lending
 
 def _get_ol_base_url():
     # Anand Oct 2013
@@ -246,7 +247,7 @@ class Edition(Thing):
             d['daisy_only'] = True
 
             collections = self.get_ia_collections()
-            borrowable = self.can_borrow()
+            borrowable = self.in_borrowable_collection()
 
             if borrowable:
                 d['borrow_url'] = self.url("/borrow")
@@ -275,17 +276,24 @@ class Edition(Thing):
         """
         return private_collection_in(self.get_ia_collections())
 
-    def can_borrow(self):
+    def in_borrowable_collection(self):
         collections = self.get_ia_collections()
         return ('lendinglibrary' in collections or
             ('inlibrary' in collections and inlibrary.get_library() is not None)
             ) and not self.is_in_private_collection()
 
+    def can_borrow(self):
+        """This method should be deprecated in favor of in_borrowable_collection"""
+        return self.in_borrowable_collection()
+
     def get_waitinglist(self):
         """Returns list of records for all users currently waiting for this book."""
         return waitinglist.get_waitinglist_for_book(self.key)
 
-    def get_waitinglist_size(self):
+    def get_realtime_availability(self):
+        return lending.get_realtime_availability_of_ocaid(self.get('ocaid'))
+
+    def get_waitinglist_size(self, ia=False):
         """Returns the number of people on waiting list to borrow this book.
         """
         return waitinglist.get_waitinglist_size(self.key)
@@ -335,7 +343,7 @@ class Edition(Thing):
     def is_lendable_book(self):
         """Returns True if the book is lendable.
         """
-        return self.can_borrow()
+        return self.in_borrowable_collection()
 
     def get_ia_download_link(self, suffix):
         """Returns IA download link for given suffix.
@@ -374,7 +382,6 @@ def some(values):
         if v:
             return v
 
-
 class Work(Thing):
     """Class to represent /type/work objects in OL.
     """
@@ -406,6 +413,38 @@ class Work(Thing):
 
     def get_lists(self, limit=50, offset=0, sort=True):
         return self._get_lists(limit=limit, offset=offset, sort=sort)
+
+    def get_users_rating(self, username):
+        if not username:
+            return None
+        work_id = extract_numeric_id_from_olid(self.key)
+        rating = Ratings.get_users_rating_for_work(username, work_id)
+        return rating
+
+    def get_users_read_status(self, username):
+        if not username:
+            return None
+        work_id = extract_numeric_id_from_olid(self.key)
+        status_id = Bookshelves.get_users_read_status_of_work(username, work_id)
+        return status_id
+
+    def get_num_users_by_bookshelf(self):
+        work_id = extract_numeric_id_from_olid(self.key)
+        num_users_by_bookshelf = Bookshelves.get_num_users_by_bookshelf_by_work_id(work_id)
+        return {
+            'want-to-read': num_users_by_bookshelf.get(Bookshelves.PRESET_BOOKSHELVES['Want to Read'], 0),
+            'currently-reading': num_users_by_bookshelf.get(Bookshelves.PRESET_BOOKSHELVES['Currently Reading'], 0),
+            'already-read': num_users_by_bookshelf.get(Bookshelves.PRESET_BOOKSHELVES['Already Read'], 0)
+        }
+
+    def get_rating_stats(self):
+        work_id = extract_numeric_id_from_olid(self.key)
+        rating_stats = Ratings.get_rating_stats(work_id)
+        if rating_stats and rating_stats['num_ratings'] > 0:
+            return {
+            'avg_rating': round(rating_stats['avg_rating'],2),
+            'num_ratings': rating_stats['num_ratings']
+            }
 
     def _get_d(self):
         """Returns the data that goes into memcache as d/$self.key.
@@ -496,6 +535,12 @@ class Author(Thing):
         return self._get_lists(limit=limit, offset=offset, sort=sort)
 
 class User(Thing):
+
+    DEFAULT_PREFERENCES = {
+        'updates': 'no',
+        'public_readlog': 'no'
+    }
+
     def get_status(self):
         account = self.get_account() or {}
         return account.get("status")
@@ -518,8 +563,25 @@ class User(Thing):
     def get_username(self):
         return self.key.split("/")[-1]
 
+    def preferences(self):
+        key = "%s/preferences" % self.key
+        prefs = web.ctx.site.get(key)
+        return (prefs and prefs.dict().get('notifications')) or self.DEFAULT_PREFERENCES
+
+    def save_preferences(self, new_prefs, msg='updating user preferences'):
+        key = '%s/preferences' % self.key
+        old_prefs = web.ctx.site.get(key)
+        prefs = (old_prefs and old_prefs.dict()) or {'key': key, 'type': {'key': '/type/object'}}
+        if 'notifications' not in prefs:
+            prefs['notifications'] = self.DEFAULT_PREFERENCES
+        prefs['notifications'].update(new_prefs)
+        web.ctx.site.save(prefs, msg)
+
     def is_admin(self):
         return '/usergroup/admin' in [g.key for g in self.usergroups]
+
+    def is_librarian(self):
+        return '/usergroup/librarians' in [g.key for g in self.usergroups]
 
     def get_lists(self, seed=None, limit=100, offset=0, sort=True):
         """Returns all the lists of this user.
@@ -606,6 +668,9 @@ class User(Thing):
         """
         loan = self.get_loan_for(book)
         return loan is not None
+
+    #def can_borrow_edition(edition, _type):
+
 
     def get_loan_for(self, book):
         """Returns the loan object for given book.

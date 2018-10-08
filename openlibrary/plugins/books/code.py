@@ -1,34 +1,27 @@
 """Open Library Books API
 """
 
-from infogami.plugins.api.code import add_hook
 import dynlinks
 import readlinks
-
-import web
-from infogami.infobase import _json as simplejson
-
-from infogami.utils import delegate
-from infogami.plugins.api.code import jsonapi
 
 import urlparse
 import re
 import urllib2
+import web
 
-class books:
+from infogami.infobase import _json as simplejson
+from infogami.utils import delegate
+from infogami.plugins.api.code import jsonapi
+
+class books_json(delegate.page):
+    path = "/api/books"
+
+    @jsonapi
     def GET(self):
         i = web.input(bibkeys='', callback=None, details="false")
-
-        web.ctx.headers = []
-        if i.get("format") == "json":
-            web.header('Content-Type', 'application/json')
-        else:
-            web.header('Content-Type', 'text/javascript')
-
+        if web.ctx.path.endswith('.json'):
+            i.format = 'json'
         return dynlinks.dynlinks(i.bibkeys.split(","), i)
-
-add_hook("books", books)
-
 
 class read_singleget(delegate.page):
     """Handle the single-lookup form of the Hathi-style API

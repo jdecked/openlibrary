@@ -10,6 +10,7 @@ import simplejson
 import uuid
 import urllib
 import urllib2
+import logging
 
 import lepl.apps.rfc3696
 import web
@@ -20,6 +21,7 @@ from infogami.infobase.client import ClientException
 
 from openlibrary.core import stats, helpers
 
+logger = logging.getLogger("openlibrary.account.model")
 
 def append_random_suffix(text, limit=9999):
     return '%s%s' % (text, random.randint(0, limit))
@@ -501,8 +503,9 @@ class InternetArchiveAccount(web.storage):
         attempt = 0
         while True:
             response = cls.xauth(
-                'create', test=test, email=email, password=password,
-                screenname=_screenname, verified=verified)
+                'create', test=test, email=email,
+                password=password, screenname=_screenname,
+                verified=verified, service='openlibrary', notifications=[])
 
             if response.get('success'):
                 ia_account = cls.get(email=email)
@@ -523,13 +526,25 @@ class InternetArchiveAccount(web.storage):
             attempt += 1
 
     @classmethod
-    def xauth(cls, service, test=None, s3_key=None, s3_secret=None, xauth_url=None, **data):
+    def xauth(cls, op, test=None, s3_key=None, s3_secret=None,
+              xauth_url=None, **data):
         from openlibrary.core import lending
-        url = "%s?op=%s" % (xauth_url or lending.config_ia_xauth_api_url, service)
+        url = "%s?op=%s" % (xauth_url or lending.config_ia_xauth_api_url, op)
         data.update({
             'access': s3_key or lending.config_ia_ol_xauth_s3.get('s3_key'),
             'secret': s3_secret or lending.config_ia_ol_xauth_s3.get('s3_secret')
         })
+
+        # Currently, optional parameters, like `service` are passed as
+        # **kwargs (i.e. **data). The xauthn service uses the named
+        # parameter `activation-type` which contains a dash and thus
+        # is unsuitable as a kwarg name. Therefore, if we're
+        # performing an account `create` xauthn operation and the
+        # `service` parameter is present, we need to rename `service`
+        # as `activation-type` so it is forwarded correctly to xauth:
+        if op == 'create' and 'service' in data:
+            data['activation-type'] = data.pop('service')
+
         payload = simplejson.dumps(data)
         if test:
             url += "&developer=%s" % test
@@ -547,9 +562,29 @@ class InternetArchiveAccount(web.storage):
         return simplejson.loads(response)
 
     @classmethod
+    def s3auth(cls, access_key, secret_key):
+        """Authenticates an Archive.org user based on s3 keys"""
+        from openlibrary.core import lending
+        url = lending.config_ia_s3_auth_url
+        try:
+            req = urllib2.Request(url, headers={
+                'Content-Type': 'application/json',
+                'authorization': 'LOW %s:%s' % (access_key, secret_key)
+            })
+            f = urllib2.urlopen(req)
+            response = f.read()
+            f.close()
+        except urllib2.HTTPError as e:
+            try:
+                response = e.read()
+            except simplejson.decoder.JSONDecodeError:
+                return {'error': e.read(), 'code': e.code}
+        return simplejson.loads(response)
+
+    @classmethod
     def get(cls, email, test=False, _json=False, s3_key=None, s3_secret=None, xauth_url=None):
         email = email.strip().lower()
-        response = cls.xauth(email=email, test=test, service="info",
+        response = cls.xauth(email=email, test=test, op="info",
                              s3_key=s3_key, s3_secret=s3_secret, xauth_url=xauth_url)
         if 'success' in response:
             values = response.get('values', {})
@@ -569,7 +604,8 @@ class InternetArchiveAccount(web.storage):
             return reason
         return "ok"
 
-def audit_accounts(email, password, require_link=False, test=False):
+def audit_accounts(email, password, require_link=False,
+                   s3_access_key=None, s3_secret_key=None, test=False):
     """Performs an audit of the IA or OL account having this email.
 
     The audit:
@@ -589,10 +625,16 @@ def audit_accounts(email, password, require_link=False, test=False):
     """
     from openlibrary.core import lending
 
-    if not valid_email(email):
-        return {'error': 'invalid_email'}
-
-    ia_login = InternetArchiveAccount.authenticate(email, password)
+    if s3_access_key and s3_secret_key:
+        r = InternetArchiveAccount.s3auth(s3_access_key, s3_secret_key)
+        if not r.get('authorized', False):
+            return {'error': 'invalid_s3keys'}
+        ia_login = "ok"
+        email = r['username']
+    else:
+        if not valid_email(email):
+            return {'error': 'invalid_email'}
+        ia_login = InternetArchiveAccount.authenticate(email, password)
 
     if any(ia_login == err for err
             in ['account_blocked', 'account_locked']):
@@ -640,6 +682,8 @@ def audit_accounts(email, password, require_link=False, test=False):
         # lending.config_ia_auth_only is enabled, we need to create
         # and link it.
         if not ol_account:
+            if not password:
+                raise {'error': 'link_attempt_requires_password'}
             try:
                 ol_account = OpenLibraryAccount.create(
                     ia_account.itemname, email, password,
@@ -697,4 +741,4 @@ def audit_accounts(email, password, require_link=False, test=False):
 @public
 def get_internet_archive_id(key):
     username = key.split('/')[-1]
-    return OpenLibraryAccount.get(username=username).internetarchive_itemname
+    return OpenLibraryAccount.get(username=username).itemname

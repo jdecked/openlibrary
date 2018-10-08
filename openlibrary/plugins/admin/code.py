@@ -22,17 +22,15 @@ from openlibrary.catalog.add_book import update_ia_metadata_for_ol_edition, \
     create_ol_subjects_for_ocaid
 
 import openlibrary
-from openlibrary.core import lending
-from openlibrary.core import admin as admin_stats
-from openlibrary.plugins.upstream import forms
-from openlibrary.plugins.upstream.account import send_forgot_password_email
-from openlibrary.plugins.upstream import spamcheck
-from openlibrary import accounts
-from openlibrary.core import helpers as h
 
-from openlibrary.plugins.admin import services
-from openlibrary.core import imports
+from openlibrary import accounts
+
+from openlibrary.core import lending, admin as admin_stats, helpers as h, imports, cache
 from openlibrary.core.waitinglist import Stats as WLStats
+from openlibrary.plugins.upstream import forms, spamcheck
+from openlibrary.plugins.upstream.account import send_forgot_password_email
+from openlibrary.plugins.admin import services
+
 
 logger = logging.getLogger("openlibrary.admin")
 
@@ -83,7 +81,7 @@ class admin(delegate.page):
 
 class admin_index:
     def GET(self):
-        return render_template("admin/index",get_counts())
+        return web.seeother('/stats')
 
 class gitpull:
     def GET(self):
@@ -152,9 +150,10 @@ class add_work_to_staff_picks:
         return render_template("admin/sync")
 
     def POST(self):
-        i = web.input(action="add", work_id='')
+        i = web.input(action="add", work_id='', subjects='openlibrary_staff_picks')
         results = {}
         work_ids = i.work_id.split(',')
+        subjects = i.subjects.split(',')
         for work_id in work_ids:
             work = web.ctx.site.get('/works/%s' % work_id)
             editions = work.editions
@@ -162,7 +161,7 @@ class add_work_to_staff_picks:
             results[work_id] = {}
             for ocaid in ocaids:
                 results[work_id][ocaid] = create_ol_subjects_for_ocaid(
-                    ocaid, subjects=['openlibrary_staff_picks'])
+                    ocaid, subjects=subjects)
         
         return delegate.RawText(simplejson.dumps(results), content_type="application/json")
                                 
@@ -571,7 +570,6 @@ class inspect:
         i = web.input(action="read")
         i.setdefault("keys", "")
 
-        from openlibrary.core import cache
         mc = cache.get_memcache()
 
         keys = [k.strip() for k in i["keys"].split() if k.strip()]
@@ -697,7 +695,6 @@ def setup():
     register_admin_page('/admin/block', block, label='')
     register_admin_page('/admin/loans', loans_admin, label='')
     register_admin_page('/admin/waitinglists', waitinglists_admin, label='')
-
     register_admin_page('/admin/status', service_status, label = "Open Library services")
     register_admin_page('/admin/inspect(?:(/.+))?', inspect, label="")
     register_admin_page('/admin/graphs', _graphs, label="")

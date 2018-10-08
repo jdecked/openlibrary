@@ -13,17 +13,28 @@ ACCESS_LOG_FORMAT='%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s"'
 # Use python from local env if it exists or else default to python in the path.
 PYTHON=$(if $(wildcard env),env/bin/python,python)
 
-.PHONY: all clean distclean git css js i18n docs
+.PHONY: all clean distclean git css js i18n
 
 all: git css js i18n
 
 css:
 	mkdir -p $(BUILD)
-	bash static/css/all.cssh > $(BUILD)/all.css
+	lessc -x static/css/page-admin.less $(BUILD)/page-admin.css
+	lessc -x static/css/page-edit.less $(BUILD)/page-edit.css
+	lessc -x static/css/page-form.less $(BUILD)/page-form.css
+	lessc -x static/css/page-home.less $(BUILD)/page-home.css
+	lessc -x static/css/page-plain.less $(BUILD)/page-plain.css
+	lessc -x static/css/page-user.less $(BUILD)/page-user.css
+	lessc -x static/css/js-all.less $(BUILD)/js-all.css
+	lessc -x static/css/page-book-widget.less $(BUILD)/page-book-widget.css
+	lessc -x static/css/js-books-edit.less $(BUILD)/js-books-edit.css
+	lessc -x static/css/page-design.less $(BUILD)/page-design.css
+	lessc -x static/css/page-dev.less $(BUILD)/page-dev.css
 
 js:
 	mkdir -p $(BUILD)
 	bash static/js/vendor.jsh > $(BUILD)/vendor.js
+	bash static/js/vendor.jsh 2 > $(BUILD)/vendor-v2.js
 	bash static/js/all.jsh > $(BUILD)/all.js
 
 i18n:
@@ -33,9 +44,6 @@ git:
 	git submodule init
 	git submodule sync
 	git submodule update
-
-docs:
-	$(PYTHON) setup.py build_sphinx
 
 clean:
 	rm -rf $(BUILD)
@@ -88,4 +96,5 @@ reindex-solr:
 	psql openlibrary -t -c 'select key from thing' | sed 's/ *//' | grep '^/authors/' | PYTHONPATH=$(PWD) xargs python openlibrary/solr/update_work.py -s http://0.0.0.0/ -c conf/openlibrary.yml --data-provider=legacy
 
 test:
-	py.test openlibrary/tests openlibrary/mocks openlibrary/olbase openlibrary/plugins openlibrary/utils
+	npm test
+	pytest openlibrary/tests openlibrary/mocks openlibrary/olbase openlibrary/plugins openlibrary/utils openlibrary/catalog

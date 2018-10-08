@@ -18,13 +18,16 @@ import infogami
 if not hasattr(infogami.config, 'features'):
     infogami.config.features = []
 
+from infogami.utils.app import metapage
 from infogami.utils import delegate
-from infogami.utils.view import render, public, safeint, add_flash_message
+from infogami.utils.view import render, render_template, public, safeint, add_flash_message
 from infogami.infobase import client
 from infogami.core.db import ValidationException
 
-from openlibrary.utils.isbn import isbn_13_to_isbn_10
+from openlibrary.utils.isbn import isbn_13_to_isbn_10, isbn_10_to_isbn_13
+from openlibrary.core.lending import get_work_availability, get_edition_availability
 import openlibrary.core.stats
+from openlibrary.plugins.openlibrary.home import format_work_data
 
 import processors
 
@@ -80,7 +83,7 @@ class hooks(client.hook):
             books = web.ctx.site.things({"type": "/type/edition", "authors": page.key})
             books = books or web.ctx.site.things({"type": "/type/work", "authors": {"author": {"key": page.key}}})
             if page.type.key == '/type/delete' and books:
-                raise ValidationException("Deleting author pages is not allowed.")
+                raise ValidationException("This Author page cannot be deleted as %d record(s) still reference this id. Please remove or reassign before trying again. Referenced by: %s" % (len(books), books))
             elif page.type.key != '/type/author' and books:
                 raise ValidationException("Changing type of author pages is not allowed.")
 
@@ -165,6 +168,22 @@ def sampleload(filename="sampledump.txt.gz"):
     queries = [simplejson.loads(line) for  line in f]
     print web.ctx.site.save_many(queries)
 
+
+class routes(delegate.page):
+    path = "/developers/routes"
+
+    def GET(self):
+        class ModulesToStr(simplejson.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, metapage):
+                    return obj.__module__ + "." + obj.__name__
+                return super(ModulesToStr, self).default(obj)
+
+        from openlibrary import code
+        return '<pre>%s</pre>' % simplejson.dumps(
+            code.delegate.pages, sort_keys=True, cls=ModulesToStr,
+            indent=4, separators=(',', ': '))
+
 class addbook(delegate.page):
     path = "/addbook"
 
@@ -184,6 +203,21 @@ class addbook(delegate.page):
         key = web.ctx.site.new_key('/type/edition')
         web.ctx.path = key
         return edit().POST(key)
+
+class widget(delegate.page):
+    path = "/(works|books)/(OL\d+[W|M])/widget"
+
+    def GET(self, _type, olid=None):
+        if olid:
+            getter = get_work_availability if _type == 'works' else get_edition_availability
+            item = web.ctx.site.get('/%s/%s' % (_type, olid)) or {}
+            item['olid'] = olid
+            item['availability'] = getter(olid).get(item['olid'])
+            item['authors'] = [web.storage(key=a.key, name=a.name or None) for a in item.get_authors()]
+            return delegate.RawText(
+                render_template("widget", item if _type == 'books' else format_work_data(item)),
+                content_type="text/html")
+        raise web.seeother("/")
 
 class addauthor(delegate.page):
     path = '/addauthor'
@@ -457,9 +491,9 @@ class _yaml(delegate.mode):
         d = self.get_data(key)
 
         if web.input(text="false").text.lower() == "true":
-            web.header('Content-Type', 'text/plain')
+            web.header('Content-Type', 'text/plain; charset=utf-8')
         else:
-            web.header('Content-Type', 'text/x-yaml')
+            web.header('Content-Type', 'text/x-yaml; charset=utf-8')
 
         raise web.ok(self.dump(d))
 
@@ -754,16 +788,42 @@ class backdoor(delegate.page):
             result = delegate.RawText(result)
         return result
 
+def is_bot():
+    """Generated on ol-www1 within /var/log/nginx with:
+
+    cat access.log | grep -oh "; \w*[bB]ot" | sort --unique | awk '{print tolower($2)}'
+    cat access.log | grep -oh "; \w*[sS]pider" | sort --unique | awk '{print tolower($2)}'
+
+    Manually removed singleton `bot` (to avoid overly complex grep regex)
+    """
+    user_agent_bots = [
+        'sputnikbot', 'dotbot', 'semrushbot',
+        'googlebot', 'yandexbot', 'monsidobot', 'kazbtbot',
+        'seznambot', 'dubbotbot', '360spider', 'redditbot',
+        'yandexmobilebot', 'linkdexbot', 'musobot', 'mojeekbot',
+        'focuseekbot', 'behloolbot', 'startmebot',
+        'yandexaccessibilitybot', 'uptimerobot', 'femtosearchbot',
+        'pinterestbot', 'toutiaospider', 'yoozbot', 'parsijoobot',
+        'equellaurlbot', 'donkeybot', 'paperlibot', 'nsrbot',
+        'discordbot', 'ahrefsbot', '`googlebot', 'coccocbot',
+        'buzzbot', 'laserlikebot', 'baiduspider', 'bingbot',
+        'mj12bot', 'yoozbotadsbot'
+    ]
+    user_agent = web.ctx.env['HTTP_USER_AGENT'].lower()
+    return any([bot in user_agent for bot in user_agent_bots])
+
 def setup_template_globals():
     web.template.Template.globals.update({
         "sorted": sorted,
         "zip": zip,
         "tuple": tuple,
         "isbn_13_to_isbn_10": isbn_13_to_isbn_10,
+        'isbn_10_to_isbn_13': isbn_10_to_isbn_13,
         "NEWLINE": "\n",
         "random": random.Random(),
 
         # bad use of globals
+        "is_bot": is_bot,
         "time": time,
         "input": web.input,
         "dumps": simplejson.dumps,
@@ -779,9 +839,10 @@ def setup_context_defaults():
 
 def setup():
     import home, inlibrary, borrow_home, libraries, stats, support, \
-        events, status, merge_editions, authors
+        events, design, status, merge_editions, authors
 
     home.setup()
+    design.setup()
     inlibrary.setup()
     borrow_home.setup()
     libraries.setup()

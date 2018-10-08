@@ -17,22 +17,23 @@ from infogami.infobase.client import ClientException
 from infogami.utils.context import context
 import infogami.core.code as core
 
+from openlibrary import accounts
 from openlibrary.i18n import gettext as _
 from openlibrary.core import helpers as h, lending
+from openlibrary.core.bookshelves import Bookshelves
 from openlibrary.plugins.recaptcha import recaptcha
-
-from openlibrary import accounts
+from openlibrary.plugins import openlibrary as olib
 from openlibrary.accounts import (
-    audit_accounts,
-    Account, OpenLibraryAccount, InternetArchiveAccount,
-    valid_email
-)
+    audit_accounts, Account, OpenLibraryAccount, InternetArchiveAccount, valid_email)
+
 import forms
 import utils
 import borrow
 
 
 logger = logging.getLogger("openlibrary.account")
+
+USERNAME_RETRIES = 3
 
 # XXX: These need to be cleaned up
 send_verification_email = accounts.send_verification_email
@@ -53,6 +54,7 @@ LOGIN_ERRORS = {
         "username_registered": "This username is already registered",
         "ia_login_only": "Sorry, you must use your Internet Archive email and password to log in",
         "max_retries_exceeded": "A problem occurred and we were unable to log you in.",
+        "invalid_s3keys": "Login attempted with invalid Internet Archive s3 credentials.",
         "wrong_ia_account": "An Open Library account with this email is already linked to a different Internet Archive account. Please contact info@openlibrary.org."
     }
 
@@ -175,7 +177,7 @@ class account_migration(delegate.page):
                 password = OpenLibraryAccount.generate_random_password(16)
                 ia_account = InternetArchiveAccount.create(
                     ol_account.username or ol_account.displayname,
-                    ol_account.email, password, verified=True, retries=3)
+                    ol_account.email, password, verified=True, retries=USERNAME_RETRIES)
                 return delegate.RawText(simplejson.dumps({
                     'username': ol_account.username,
                     'email': ol_account.email,
@@ -244,7 +246,7 @@ class account_create(delegate.page):
             # IA credentials will auto create and link OL account.
             ia_account = InternetArchiveAccount.create(
                 screenname=i.username, email=i.email, password=i.password,
-                verified=False)
+                verified=False, retries=USERNAME_RETRIES)
         except ValueError as e:
             f.note = LOGIN_ERRORS['max_retries_exceeded']
             return render['account/create'](f)
@@ -252,6 +254,40 @@ class account_create(delegate.page):
         return render['account/verify'](username=i.username, email=i.email)
 
 del delegate.pages['/account/register']
+
+
+class account_login_json(delegate.page):
+
+    encoding = "json"
+    path = "/account/login"
+
+    def POST(self):
+        """Overrides `account_login` and infogami.login to prevent users from
+        logging in with Open Library username and password if the
+        payload is json. Instead, if login attempted w/ json
+        credentials, requires Archive.org s3 keys.
+        """
+        from openlibrary.plugins.openlibrary.code import BadRequest
+        d = simplejson.loads(web.data())
+        access = d.get('access', None)
+        secret = d.get('secret', None)
+        test = d.get('test', False)
+
+        # Try S3 authentication first, fallback to infogami user, pass
+        if access and secret:
+            audit = audit_accounts(None, None, require_link=True,
+                                   s3_access_key=access,
+                                   s3_secret_key=secret, test=test)
+            error = audit.get('error')
+            if error:
+                raise olib.code.BadRequest(error)
+            web.setcookie(config.login_cookie_name, web.ctx.conn.get_auth_token())
+        # Fallback to infogami user/pass
+        else:
+            from infogami.plugins.api.code import login as infogami_login
+            infogami_login().POST()
+
+
 
 class account_login(delegate.page):
     """Account login.
@@ -279,22 +315,22 @@ class account_login(delegate.page):
 
     def POST(self):
         i = web.input(username="", connect=None, password="", remember=False,
-                      redirect='/', test=False)
+                      redirect='/', test=False, access=None, secret=None)
         email = i.username  # XXX username is now email
-        audit = audit_accounts(email, i.password, require_link=True, test=i.test)
+        audit = audit_accounts(email, i.password, require_link=True,
+                               s3_access_key=i.access,
+                               s3_secret_key=i.secret, test=i.test)
         error = audit.get('error')
-
         if error:
             return self.render_error(error, i)
 
+        expires = (i.remember and 3600 * 24 * 7) or ""
+        web.setcookie(config.login_cookie_name, web.ctx.conn.get_auth_token(),
+                      expires=expires)
         blacklist = ["/account/login", "/account/password", "/account/email",
                      "/account/create"]
         if i.redirect == "" or any([path in i.redirect for path in blacklist]):
             i.redirect = "/"
-        expires = (i.remember and 3600 * 24 * 7) or ""
-
-        web.setcookie(config.login_cookie_name, web.ctx.conn.get_auth_token(),
-                      expires=expires)
         raise web.seeother(i.redirect)
 
     def POST_resend_verification_email(self, i):
@@ -308,7 +344,7 @@ class account_login(delegate.page):
         account = OpenLibraryAccount.get(email=i.email)
         account.send_verification_email()
 
-        title = _("Hi %(user)s", user=account.displayname)
+        title = _("Hi, %(user)s", user=account.displayname)
         message = _("We've sent the verification email to %(email)s. You'll need to read that and click on the verification link to verify your email.", email=account.email)
         return render.message(title, message)
 
@@ -343,7 +379,7 @@ class account_verify(delegate.page):
             return render['account/verify/activated'](account)
         else:
             account.send_verification_email()
-            title = _("Hi %(user)s", user=account.displayname)
+            title = _("Hi, %(user)s", user=account.displayname)
             message = _("We've sent the verification email to %(email)s. You'll need to read that and click on the verification link to verify your email.", email=account.email)
             return render.message(title, message)
 
@@ -383,7 +419,7 @@ class account_email(delegate.page):
 
             send_email_change_email(username, i.email)
 
-            title = _("Hi %(user)s", user=user.displayname or username)
+            title = _("Hi, %(user)s", user=user.displayname or username)
             message = _("We've sent an email to %(email)s. You'll need to read that and click on the verification link to update your email.", email=i.email)
             return render.message(title, message)
 
@@ -584,29 +620,34 @@ class account_audit(delegate.page):
         return delegate.RawText(simplejson.dumps(result),
                                 content_type="application/json")
 
+class account_privacy(delegate.page):
+    path = "/account/privacy"
+
+    @require_login
+    def GET(self):
+        user = accounts.get_current_user()
+        return render['account/privacy'](user.preferences())
+
+    @require_login
+    def POST(self):
+        user = accounts.get_current_user()
+        user.save_preferences(web.input())
+        add_flash_message('note', _("Notification preferences have been updated successfully."))
+        web.seeother("/account")
+
 class account_notifications(delegate.page):
     path = "/account/notifications"
 
     @require_login
     def GET(self):
         user = accounts.get_current_user()
-        prefs = web.ctx.site.get(user.key + "/preferences")
-        d = (prefs and prefs.get('notifications')) or {}
-        email = accounts.get_current_user().email
-        return render['account/notifications'](d, email)
+        email = user.email
+        return render['account/notifications'](user.preferences(), email)
 
     @require_login
     def POST(self):
         user = accounts.get_current_user()
-        key = user.key + '/preferences'
-        prefs = web.ctx.site.get(key)
-
-        d = (prefs and prefs.dict()) or {'key': key, 'type': {'key': '/type/object'}}
-
-        d['notifications'] = web.input()
-
-        web.ctx.site.save(d, 'save notifications')
-
+        user.save_preferences(web.input())
         add_flash_message('note', _("Notification preferences have been updated successfully."))
         web.seeother("/account")
 
@@ -617,6 +658,125 @@ class account_lists(delegate.page):
     def GET(self):
         user = accounts.get_current_user()
         raise web.seeother(user.key + '/lists')
+
+class ReadingLog(object):
+
+    """Manages the user's account page books (reading log, waitlists, loans)"""
+
+    def __init__(self, user=None):
+        self.user = user or accounts.get_current_user()
+        #self.user.update_loan_status()
+        self.KEYS = {
+            'waitlists': self.get_waitlisted_editions,
+            'loans': self.get_loans,
+            'want-to-read': self.get_want_to_read,
+            'currently-reading': self.get_currently_reading,
+            'already-read': self.get_already_read
+        }
+
+    @property
+    def lists(self):
+        return self.user.get_lists()
+
+    @property
+    def reading_log_counts(self):
+        counts = Bookshelves.count_total_books_logged_by_user_per_shelf(
+            self.user.get_username())
+        return {
+            'want-to-read': counts.get(Bookshelves.PRESET_BOOKSHELVES['Want to Read'], 0),
+            'currently-reading': counts.get(Bookshelves.PRESET_BOOKSHELVES['Currently Reading'], 0),
+            'already-read': counts.get(Bookshelves.PRESET_BOOKSHELVES['Already Read'], 0)
+        }
+
+    def get_loans(self):
+        return borrow.get_loans(self.user)
+
+    def get_waitlist_summary(self):
+        return self.user.get_waitinglist()
+
+    def get_waitlisted_editions(self):
+        """Gets a list of records corresponding to a user's waitlisted
+        editions, fetches all the editions, and then inserts the data
+        from each waitlist record (e.g. position in line) into the
+        corresponding edition
+        """
+        waitlists = self.user.get_waitinglist()
+        keyed_waitlists = dict([(w['identifier'], w) for w in waitlists])
+        ocaids = [i['identifier'] for i in waitlists]
+        edition_keys = web.ctx.site.things({"type": "/type/edition", "ocaid": ocaids})
+        editions = web.ctx.site.get_many(edition_keys)
+        for i in xrange(len(editions)):
+            # insert the waitlist_entry corresponding to this edition
+            editions[i].waitlist_record = keyed_waitlists[editions[i].ocaid]
+        return editions
+
+    def get_want_to_read(self, page=1, limit=100):
+        work_ids = ['/works/OL%sW' % i['work_id'] for i in Bookshelves.get_users_logged_books(
+            self.user.get_username(), bookshelf_id=Bookshelves.PRESET_BOOKSHELVES['Want to Read'],
+            page=page, limit=limit)]
+        return web.ctx.site.get_many(work_ids)
+
+    def get_currently_reading(self, page=1, limit=100):
+        work_ids = ['/works/OL%sW' % i['work_id'] for i in Bookshelves.get_users_logged_books(
+            self.user.get_username(), bookshelf_id=Bookshelves.PRESET_BOOKSHELVES['Currently Reading'],
+            page=page, limit=limit)]
+        return web.ctx.site.get_many(work_ids)
+
+    def get_already_read(self, page=1, limit=100):
+        work_ids = ['/works/OL%sW' % i['work_id'] for i in Bookshelves.get_users_logged_books(
+            self.user.get_username(), bookshelf_id=Bookshelves.PRESET_BOOKSHELVES['Already Read'],
+            page=page, limit=limit)]
+        return web.ctx.site.get_many(work_ids)
+
+    def get_works(self, key):
+        key = key.lower()
+        if key in self.KEYS:
+            return self.KEYS[key]()
+        else: # must be a list or invalid page!
+            #works = web.ctx.site.get_many([ ... ])
+            raise
+
+class public_my_books(delegate.page):
+    path = "/people/([^/]+)/books"
+
+    def GET(self, username):
+        raise web.seeother('/people/%s/books/want-to-read' % username)
+
+class public_my_books(delegate.page):
+    path = "/people/([^/]+)/books/([a-zA-Z_-]+)"
+
+    def GET(self, username, key='loans'):
+        """check if user's reading log is public"""        
+        user = web.ctx.site.get('/people/%s' % username)
+        if not user:
+            return render.notfound("User %s"  % username, create=False)
+        if user.preferences().get('public_readlog', 'no') == 'yes':
+            readlog = ReadingLog(user=user)
+            works = readlog.get_works(key)
+            return render['account/books'](
+                works, key, reading_log=readlog.reading_log_counts,
+                lists=readlog.lists, user=user)
+        raise web.seeother(user.key)
+
+class account_my_books(delegate.page):
+    path = "/account/books"
+
+    @require_login
+    def GET(self):
+        raise web.seeother('/account/books/want-to-read')
+
+class account_my_books(delegate.page):
+    path = "/account/books/([a-zA-Z_-]+)"
+
+    @require_login
+    def GET(self, key='loans'):
+        user = accounts.get_current_user()
+        is_public = user.preferences().get('public_readlog', 'no') == 'yes'
+        readlog = ReadingLog()
+        works = readlog.get_works(key)
+        return render['account/books'](
+            works, key, reading_log=readlog.reading_log_counts,
+            lists=readlog.lists, user=user, public=is_public)
 
 class account_loans(delegate.page):
     path = "/account/loans"

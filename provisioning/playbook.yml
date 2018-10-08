@@ -23,6 +23,7 @@
       - build-essential
       - git-core
       - memcached
+      - npm
       - libgeoip-dev
       - python-dev
       - python-pip
@@ -30,16 +31,12 @@
       - python-beautifulsoup
       - python-babel
       - python-imaging
-      - python-couchdb
       - python-genshi
       - python-psycopg2
       - python-py
       - python-memcache
       - python-yaml
       - python-simplejson
-      - python-sphinx
-      - python-celery
-      - python-sqlalchemy
       - gunicorn
       - curl 
       - screen

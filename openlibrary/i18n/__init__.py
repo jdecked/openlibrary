@@ -1,53 +1,3 @@
-"""i18n support for Open Library using GNU gettext. Python module
-babel is used to manage the message catalogs.
-
-**Introduction**
-
-To add i18n support to Open Library, templates and macros are modified
-to use gettext function calls. For brevity, the gettext function is
-abbreviated as _.::
-
-    <a href="..">$_("More search options")</a>
-
-The messages in the the templates and macros are extracted and .pot file is created.::
-
-    $ ./scripts/i18n-messages extract
-    created openlibrary/i18n/messages.pot
-    $ cat openlibrary/i18n/messages.pot
-    ...
-    #: templates/site.html:29
-    msgid "Open Library"
-    msgstr ""
-
-    #: templates/site.html:52
-    msgid "Search"
-    msgstr ""
-    ...
-
-The .pot file contains msgid and msgstr for each translation used.
-The `msgstr` field for each entry is filled with the translation of
-the required language and that file is placed at
-openlibrary/i18n/$locale/messages.po.::
-
-    $ mkdir openlibrary/i18n/te
-    $ cp openlibrary/i18n/messages.pot openlibrary/i18n/te/messages.po
-    $ # edit openlibrary/i18n/te/messages.po and fill the translations
-
-The .po files needs to be compiled to .mo files to be able to use them
-by gettext system.::
-
-    $ ./scripts/i18n-messages compile
-    compiling openlibrary/i18n/te/messages.po
-    compiling openlibrary/i18n/it/messages.po
-    ...
-
-**Glossory**::
-
-.po - portable object
-.pot - portable object template
-.mo - machine object
-"""
-
 import web
 import os
 from StringIO import StringIO
@@ -57,7 +7,7 @@ from babel.support import Translations
 from babel.messages import Catalog
 from babel.messages.pofile import read_po, write_po
 from babel.messages.mofile import write_mo
-from babel.messages.extract import extract_from_dir, extract_python
+from babel.messages.extract import extract_from_file, extract_from_dir, extract_python
 
 root = os.path.dirname(__file__)
 
@@ -76,10 +26,10 @@ def get_locales():
     return [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))]
 
 def extract_templetor(fileobj, keywords, comment_tags, options):
-    """Extract i18n messages from web.py templates.
-    """
+    """Extract i18n messages from web.py templates."""
     try:
-        code = web.template.Template.generate_code(fileobj.read(), fileobj.name)
+        # Replace/remove inline js '\$' which interferes with the Babel python parser:
+        code = web.template.Template.generate_code(fileobj.read().replace('\$', ''), fileobj.name)
         f = StringIO(code)
         f.name = fileobj.name
     except Exception, e:
@@ -99,8 +49,11 @@ def extract_messages(dirs):
     COMMENT_TAGS = ["NOTE:"]
 
     for d in dirs:
-        extracted = extract_from_dir(d, METHODS, comment_tags=COMMENT_TAGS, strip_comment_tags=True)
-        for filename, lineno, message, comments in extracted:
+        if '.html' in d:
+            extracted = [(d,) + extract for extract in extract_from_file("openlibrary.i18n:extract_templetor", d)]
+        else:
+            extracted = extract_from_dir(d, METHODS, comment_tags=COMMENT_TAGS, strip_comment_tags=True)
+        for filename, lineno, message, comments, context in extracted:
             catalog.add(message, None, [(filename, lineno)], auto_comments=comments)
 
     path = os.path.join(root, 'messages.pot')

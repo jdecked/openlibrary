@@ -8,6 +8,7 @@ import md5
 import re
 import datetime
 import urllib2
+import logging
 
 from infogami import config
 from infogami.infobase import client
@@ -19,6 +20,8 @@ from utils import render_template
 
 from openlibrary.core import cache
 from openlibrary.core.lending import amazon_api
+from openlibrary import accounts
+from openlibrary.utils import dateutil
 from openlibrary.plugins.openlibrary.processors import ReadableUrlProcessor
 from openlibrary.plugins.openlibrary import code as ol_code
 
@@ -30,7 +33,8 @@ import borrow
 import recentchanges
 import merge_authors
 
-HALF_DAY = 60 * 60 * 12
+logger = logging.getLogger("openlibrary.plugins")
+
 BETTERWORLDBOOKS_API_URL = 'http://products.betterworldbooks.com/service.aspx?ItemId='
 
 if not config.get('coverstore_url'):
@@ -53,6 +57,14 @@ class change_photo(change_cover):
     path = "(/authors/OL\d+A)/photo"
 
 del delegate.modes['change_cover']     # delete change_cover mode added by openlibrary plugin
+
+class merge_work(delegate.page):
+    path = "(/works/OL\d+W)/merge"
+    def GET(self, key):
+        return "This looks like a good place for a merge UI!"
+
+    def POST(self, key):
+        pass
 
 @web.memoize
 @public
@@ -85,31 +97,59 @@ def get_amazon_metadata(isbn):
         if isbn:
             return cached_get_amazon_metadata(isbn)
     except Exception:
-        return {}
+        return None
 
 def _get_amazon_metadata(isbn):
-    if not amazon_api:
-        return ''  # likely dev instance and keys not set
-
     try:
+        if not amazon_api:
+            logger.info("Amazon keys likely misconfigured")
+            raise Exception
         product = amazon_api.lookup(ItemId=isbn)
-    except Exception:
-        return {'price': ''}
-    used = product._safe_get_element_text('OfferSummary.LowestUsedPrice.Amount')
-    new = product._safe_get_element_text('OfferSummary.LowestNewPrice.Amount')    
-    price, qlt = (None, None)
+    except Exception as e:
+        return None
 
+    price, qlt = (None, None)
+    used = product._safe_get_element_text('OfferSummary.LowestUsedPrice.Amount')
+    new = product._safe_get_element_text('OfferSummary.LowestNewPrice.Amount')
+
+    # prioritize lower prices and newer, all things being equal
     if used and new:
         price, qlt = (used, 'used') if int(used) < int(new) else (new, 'new')
+    # accept whichever is available
     elif used or new:
         price, qlt = (used, 'used') if used else (new, 'new')
 
+    price_fmt = None
+    if price and qlt:
+        price = '{:00,.2f}'.format(int(price)/100.)
+        price_fmt = "$%s (%s)" % (price, qlt)
+
     return {
-        'price': "$%s (%s)" % ('{:00,.2f}'.format(int(price)/100.), qlt) if price and qlt else ''
+        'price': price_fmt
     }
 
-cached_get_amazon_metadata = cache.memcache_memoize(
-    _get_amazon_metadata, "upstream.code._get_amazon_metadata", timeout=HALF_DAY)
+
+def cached_get_amazon_metadata(*args, **kwargs):
+    """If the cached data is `None`, likely a 503 throttling occurred on
+    Amazon's side. Try again to fetch the value instead of using the
+    cached value. It may 503 again, in which case the next access of
+    this page will trigger another re-cache. If the amazon API call
+    succeeds but the book has no price data, then {"price": None} will
+    be cached as to not trigger a re-cache (only the value `None`
+    will cause re-cache)
+    """
+    # fetch/compose a cache controller obj for
+    # "upstream.code._get_amazon_metadata"
+    memoized_get_amazon_metadata = cache.memcache_memoize(
+        _get_amazon_metadata, "upstream.code._get_amazon_metadata",
+        timeout=dateutil.WEEK_SECS)
+    # fetch cached value from this controller
+    result = memoized_get_amazon_metadata(*args, **kwargs)
+    if result is None:
+        # recache / update this controller's cached value
+        # (corresponding to these input args)
+        result = memoized_get_amazon_metadata.update(*args, **kwargs)[0]
+    return result
 
 @public
 def get_betterworldbooks_metadata(isbn):
@@ -144,7 +184,7 @@ def _get_betterworldbooks_metadata(isbn):
             if price and _price and _price < price:
                 price = _price
                 qlt = 'new'
-        
+
         return {
             'url': product_url[0] if product_url else None,
             'price': price,
@@ -160,7 +200,7 @@ def _get_betterworldbooks_metadata(isbn):
 
 
 cached_get_betterworldbooks_metadata = cache.memcache_memoize(
-    _get_betterworldbooks_metadata, "upstream.code._get_betterworldbooks_metadata", timeout=HALF_DAY)
+    _get_betterworldbooks_metadata, "upstream.code._get_betterworldbooks_metadata", timeout=dateutil.HALF_DAY_SECS)
 
 class DynamicDocument:
     """Dynamic document is created by concatinating various rawtext documents in the DB.
@@ -271,10 +311,13 @@ class revert(delegate.mode):
     def POST(self, key):
         i = web.input("v", _comment=None)
         v = i.v and safeint(i.v, None)
+
         if v is None:
             raise web.seeother(web.changequery({}))
 
-        if not web.ctx.site.can_write(key):
+        user = accounts.get_current_user()
+        is_admin = user and user.key in [m.key for m in web.ctx.site.get('/usergroup/admin').members]
+        if not (is_admin and web.ctx.site.can_write(key)):
             return render.permission_denied(web.ctx.fullpath, "Permission denied to edit " + key + ".")
 
         thing = web.ctx.site.get(key, i.v)

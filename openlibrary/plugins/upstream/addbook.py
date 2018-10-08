@@ -16,6 +16,7 @@ from infogami.utils.view import safeint, add_flash_message
 from infogami.infobase.client import ClientException
 
 from openlibrary.plugins.openlibrary.processors import urlsafe
+from openlibrary.utils import is_author_olid, is_work_olid
 from openlibrary.utils.solr import Solr
 from openlibrary.i18n import gettext as _
 from openlibrary import accounts
@@ -33,20 +34,8 @@ logger = logging.getLogger("openlibrary.book")
 SYSTEM_SUBJECTS = ["Accessible Book", "Lending Library", "In Library", "Protected DAISY"]
 
 
-def get_works_solr():
-    if config.get('single_core_solr'):
-        base_url = "http://%s/solr" % config.plugin_worksearch.get('solr')
-    else:
-        base_url = "http://%s/solr/works" % config.plugin_worksearch.get('solr')
-
-    return Solr(base_url)
-
-
-def get_authors_solr():
-    if config.get('single_core_solr'):
-        base_url = "http://%s/solr" % config.plugin_worksearch.get('author_solr')
-    else:
-        base_url = "http://%s/solr/authors" % config.plugin_worksearch.get('author_solr')
+def get_solr():
+    base_url = "http://%s/solr" % config.plugin_worksearch.get('solr')
     return Solr(base_url)
 
 
@@ -54,7 +43,7 @@ def get_recaptcha():
     def recaptcha_exempt():
         """Check to see if account is an admin, or more than two years old."""
         user = web.ctx.site.get_user()
-        if user and user.is_admin():
+        if user and (user.is_admin() or user.is_librarian()):
             return True
         account = user and user.get_account()
         if not account:
@@ -222,7 +211,7 @@ class addbook(delegate.page):
         if edition:
             return edition
 
-        solr = get_works_solr()
+        solr = get_solr()
         author_key = i.author_key and i.author_key.split("/")[-1]
         result = solr.select({'title': i.title, 'author_key': author_key}, doc_wrapper=make_work, q_op="AND")
 
@@ -265,7 +254,7 @@ class addbook(delegate.page):
                 id_value = id_value.replace('-', '')
             q[mapping[id_name]] = id_value
 
-        solr = get_works_solr()
+        solr = get_solr()
         result = solr.select(q, doc_wrapper=make_work, q_op="AND")
 
         if len(result.docs) > 1:
@@ -422,7 +411,7 @@ class SaveBookHelper:
         if work_data:
             if self.work is None:
                 self.work = self.new_work(self.edition)
-                self.edition.works = [{'key': self.work.key}]
+                edition_data.works = [{'key': self.work.key}]
             self.work.update(work_data)
             saveutil.save(self.work)
 
@@ -447,10 +436,11 @@ class SaveBookHelper:
         saveutil.commit(comment=comment, action="edit-book")
 
     def new_work(self, edition):
-        work_key = web.ctx.site.new_key("/type/work")
+        work_key = web.ctx.site.new_key('/type/work')
         work = web.ctx.site.new(work_key, {
-            "key": work_key,
-            "type": {'key': '/type/work'},
+            'key': work_key,
+            'type': {'key': '/type/work'},
+            'covers': edition.get('covers', []),
         })
         return work
 
@@ -624,12 +614,13 @@ class book_edit(delegate.page):
         work = edition.works and edition.works[0]
 
         if not work:
-            # HACK: create dummy work when work is not available to make edit form work
+            # HACK: create dummy work when work is not available
             work = web.ctx.site.new('', {
                 'key': '',
                 'type': {'key': '/type/work'},
                 'title': edition.title,
-                'authors': [{'type': '/type/author_role', 'author': {'key': a['key']}} for a in edition.get('authors', [])]
+                'authors': [{'type': {'key': '/type/author_role'}, 'author': {'key': a['key']}} for a in edition.get('authors', [])],
+                'subjects': edition.get('subjects', []),
             })
 
         return render_template('books/edit', work, edition, recaptcha=get_recaptcha())
@@ -810,6 +801,40 @@ class languages_autocomplete(delegate.page):
         languages = [lang for lang in utils.get_languages() if lang.name.lower().startswith(i.q.lower())]
         return to_json(languages[:i.limit])
 
+class works_autocomplete(delegate.page):
+    path = "/works/_autocomplete"
+
+    def GET(self):
+        i = web.input(q="", limit=5)
+        i.limit = safeint(i.limit, 5)
+
+        solr = get_solr()
+
+        q = solr.escape(i.q).strip()
+        if is_work_olid(q.upper()):
+            # ensure uppercase; key is case sensitive in solr
+            solr_q = 'key:"/works/%s"' % q.upper()
+        else:
+            solr_q = 'title:"%s"^2 OR title:(%s*)' % (q, q)
+
+        params = {
+            'q_op': 'AND',
+            'sort': 'edition_count desc',
+            'rows': i.limit,
+            'fq': 'type:work',
+            # limit the fields returned for better performance
+            'fl': 'key,title,subtitle,first_publish_year,author_name,edition_count'
+        }
+
+        data = solr.select(solr_q, **params)
+        docs = data['docs']
+
+        for d in docs:
+            # Required by the frontend
+            d['name'] = d['title']
+            if 'subtitle' in d:
+                d['name'] += ": " + d['subtitle']
+        return to_json(docs)
 
 class authors_autocomplete(delegate.page):
     path = "/authors/_autocomplete"
@@ -818,26 +843,34 @@ class authors_autocomplete(delegate.page):
         i = web.input(q="", limit=5)
         i.limit = safeint(i.limit, 5)
 
-        solr = get_authors_solr()
+        solr = get_solr()
 
-        name = solr.escape(i.q) + "*"
-        q = 'name:(%s) OR alternate_names:(%s)' % (name, name)
+        q = solr.escape(i.q).strip()
+        solr_q = ''
+        if is_author_olid(q.upper()):
+            # ensure uppercase; key is case sensitive in solr
+            solr_q = 'key:"/authors/%s"' % q.upper()
+        else:
+            prefix_q = q + "*"
+            solr_q = 'name:(%s) OR alternate_names:(%s)' % (prefix_q, prefix_q)
+
         params = {
             'q_op': 'AND',
-            'sort': 'work_count desc'
+            'sort': 'work_count desc',
+            'rows': i.limit,
+            'fq': 'type:author'
         }
-        if config.get('single_core_solr'):
-            params['fq'] = 'type:author'
-        data = solr.select(q, **params)
+
+        data = solr.select(solr_q, **params)
         docs = data['docs']
+
         for d in docs:
-            if not config.get('single_core_solr'):
-                d.key = "/authors/" + d.key
             if 'top_work' in d:
                 d['works'] = [d.pop('top_work')]
             else:
                 d['works'] = []
             d['subjects'] = d.pop('top_subjects', [])
+
         return to_json(docs)
 
 

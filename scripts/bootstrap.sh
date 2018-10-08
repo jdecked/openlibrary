@@ -27,6 +27,7 @@ libxml2-dev
 libxslt-dev
 curl
 screen
+npm
 python-dev
 python-pip
 
@@ -37,6 +38,12 @@ python-yaml"
 
 apt-get install -y $APT_PACKAGES
 
+# Install `lessc` dependencies for css pre-processing
+npm config set strict-ssl false
+npm install -g less
+npm update -g less
+ln -nsf /usr/bin/nodejs /usr/bin/node
+
 PYTHON_PACKAGES=$OL_ROOT/test_requirements.txt
 
 pip install -r $PYTHON_PACKAGES
@@ -44,16 +51,17 @@ pip install -r $PYTHON_PACKAGES
 REINDEX_SOLR=no
 
 function setup_database() {
-    echo "finding if posgres user vagrant already exists."
-    x=`sudo -u postgres psql -t -c "select count(*) FROM pg_catalog.pg_user where usename='$OL_USER'"`
+    echo "finding if posgres user already exists."
+    x=`sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$OL_USER'"`
     echo "result = $x"
-    if [ "$x" -eq 0 ]; then
+    if [ -z "$x" ]; then
         echo "setting up database..."
-        echo "  creating postgres user 'OL_USER'"
+        echo "  creating postgres user '$OL_USER'"
         sudo -u postgres createuser -s $OL_USER
 
         echo "  creating openlibrary database"
         sudo -u $OL_USER createdb openlibrary
+        sudo -u $OL_USER psql openlibrary < $OL_ROOT/openlibrary/core/schema.sql
         sudo -u $OL_USER createdb coverstore
         sudo -u $OL_USER psql coverstore < $OL_ROOT/openlibrary/coverstore/schema.sql
 
@@ -66,9 +74,8 @@ function setup_database() {
 }
 
 function setup_ol() {
-    # Download sample dev-instance database from archive.org
-    wget https://archive.org/download/ol_vendor/openlibrary-devinstance.pg_dump.gz -O /tmp/openlibrary-devinstance.pg_dump.gz
-    zcat /tmp/openlibrary-devinstance.pg_dump.gz | sudo -u $OL_USER psql openlibrary
+    # Load the dev instance database
+    sudo -u $OL_USER psql openlibrary < "$OL_ROOT/scripts/dev-instance/dev_db.pg_dump"
 
     # This is an alternative way to install OL from scratch
     #cd $OL_ROOT
@@ -94,9 +101,9 @@ setup_database
 setup_nginx
 
 # change solr/tomcat port to 8983
-perl -i -pe 's/8080/8983/'  /etc/tomcat6/server.xml
+perl -i -pe 's/8080/8983/'  /etc/tomcat7/server.xml
 cp $OL_ROOT/conf/solr/conf/schema.xml /etc/solr/conf/
-/etc/init.d/tomcat6 restart
+/etc/init.d/tomcat7 restart
 
 mkdir -p /var/log/openlibrary /var/lib/openlibrary
 chown $OL_USER:$OL_USER /var/log/openlibrary /var/lib/openlibrary
@@ -104,25 +111,12 @@ chown $OL_USER:$OL_USER /var/log/openlibrary /var/lib/openlibrary
 # run make to initialize git submodules, build css and js files
 cd $OL_ROOT && make
 
-cp $OL_ROOT/conf/init/* /etc/init/
-cd $OL_ROOT/conf/init
-for name in ol-*
-do
-	echo starting ${name//.conf}
-	initctl start ${name//.conf} || initctl restart ${name//.conf}
-done
+cp $OL_ROOT/conf/init/*.service /lib/systemd/system/
+
+$OL_ROOT/scripts/ol-start.sh
 
 if [ "$REINDEX_SOLR" == "yes" ]
 then
     cd $OL_ROOT
     sudo -u $OL_USER make reindex-solr
 fi
-
-echo "sudo service nginx restart
-cd /openlibrary/conf/init
-for name in ol-*; do echo starting ${name//.conf}; sudo initctl start ${name//.conf} || sudo initctl restart ${name//.conf}; done" > /etc/init.d/ol-start
-
-chmod +x /etc/init.d/ol-start
-
-echo "/etc/init.d/ol-start
-exit 0" > /etc/rc.local

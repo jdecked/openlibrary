@@ -9,8 +9,9 @@ from infogami.infobase import client, common
 
 from openlibrary.core import formats, cache
 import openlibrary.core.helpers as h
-
+from openlibrary.utils import dateutil
 from openlibrary.plugins.worksearch import subjects
+
 
 class lists_home(delegate.page):
     path = "/lists"
@@ -106,7 +107,7 @@ class lists_json(delegate.page):
                 "self": web.ctx.path
             },
             "size": size,
-            "entries": [list.preview() for list in lists]
+            "entries": [lst.preview() for lst in lists]
         }
         if offset + len(lists) < size:
             d['links']['next'] = web.changequery(limit=limit, offset=offset + limit)
@@ -143,7 +144,7 @@ class lists_json(delegate.page):
 
         seeds = self.process_seeds(data.get('seeds', []))
 
-        list = user.new_list(
+        lst = user.new_list(
             name=data.get('name', ''),
             description=data.get('description', ''),
             tags=data.get('tags', []),
@@ -151,11 +152,11 @@ class lists_json(delegate.page):
         )
 
         try:
-            result = site.save(list.dict(),
+            result = site.save(lst.dict(),
                 comment="Created new list.",
                 action="lists",
                 data={
-                    "list": {"key": list.key},
+                    "list": {"key": lst.key},
                     "seeds": seeds
                 }
             )
@@ -204,34 +205,34 @@ class list_view_json(delegate.page):
     content_type = "application/json"
 
     def GET(self, key):
-        list = web.ctx.site.get(key)
-        if not list or list.type.key == '/type/delete':
+        lst = web.ctx.site.get(key)
+        if not lst or lst.type.key == '/type/delete':
             raise web.notfound()
 
         i = web.input()
         if i.get("_raw") == "true":
-            return delegate.RawText(self.dumps(list.dict()))
+            return delegate.RawText(self.dumps(lst.dict()))
 
-        data = self.get_list_data(list)
+        data = self.get_list_data(lst)
         return delegate.RawText(self.dumps(data))
 
-    def get_list_data(self, list):
+    def get_list_data(self, lst):
         return {
             "links": {
-                "self": list.key,
-                "seeds": list.key + "/seeds",
-                "subjects": list.key + "/subjects",
-                "editions": list.key + "/editions",
+                "self": lst.key,
+                "seeds": lst.key + "/seeds",
+                "subjects": lst.key + "/subjects",
+                "editions": lst.key + "/editions",
             },
-            "name": list.name or None,
-            "description": list.description and unicode(list.description) or None,
-            "seed_count": len(list.seeds),
-            "edition_count": list.edition_count,
+            "name": lst.name or None,
+            "description": lst.description and unicode(lst.description) or None,
+            "seed_count": len(lst.seeds),
+            "edition_count": lst.edition_count,
 
             "meta": {
-                "revision": list.revision,
-                "created": list.created.isoformat(),
-                "last_modified": list.last_modified.isoformat(),
+                "revision": lst.revision,
+                "created": lst.created.isoformat(),
+                "last_modified": lst.last_modified.isoformat(),
             }
         }
 
@@ -250,11 +251,11 @@ class list_seeds(delegate.page):
     content_type = "application/json"
 
     def GET(self, key):
-        list = web.ctx.site.get(key)
-        if not list:
+        lst = web.ctx.site.get(key)
+        if not lst:
             raise web.notfound()
 
-        seeds = [seed.dict() for seed in list.get_seeds()]
+        seeds = [seed.dict() for seed in lst.get_seeds()]
 
         data = {
             "links": {
@@ -271,8 +272,8 @@ class list_seeds(delegate.page):
     def POST(self, key):
         site = web.ctx.site
 
-        list = site.get(key)
-        if not list:
+        lst = site.get(key)
+        if not lst:
             raise web.notfound()
 
         if not site.can_write(key):
@@ -287,10 +288,10 @@ class list_seeds(delegate.page):
         process_seeds = lists_json().process_seeds
 
         for seed in process_seeds(data["add"]):
-            list.add_seed(seed)
+            lst.add_seed(seed)
 
         for seed in process_seeds(data["remove"]):
-            list.remove_seed(seed)
+            lst.remove_seed(seed)
 
         seeds = []
         for seed in data["add"] + data["remove"]:
@@ -306,7 +307,7 @@ class list_seeds(delegate.page):
             "remove": data.get("remove", [])
         }
 
-        d = list._save(comment="updated list seeds.", action="lists", data=changeset_data)
+        d = lst._save(comment="updated list seeds.", action="lists", data=changeset_data)
         web.header("Content-Type", self.content_type)
         return delegate.RawText(formats.dump(d, self.encoding))
 
@@ -324,8 +325,8 @@ class list_editions(delegate.page):
         return "lists" in web.ctx.features
 
     def GET(self, path):
-        list = web.ctx.site.get(path)
-        if not list:
+        lst = web.ctx.site.get(path)
+        if not lst:
             raise web.notfound()
 
         i = web.input(limit=50, page=1)
@@ -333,12 +334,12 @@ class list_editions(delegate.page):
         page = h.safeint(i.page, 1) - 1
         offset = page * limit
 
-        editions = list.get_editions(limit=limit, offset=offset)
+        editions = lst.get_editions(limit=limit, offset=offset)
 
-        list.preload_authors(editions['editions'])
-        list.load_changesets(editions['editions'])
+        lst.preload_authors(editions['editions'])
+        lst.load_changesets(editions['editions'])
 
-        return render_template("type/list/editions.html", list, editions)
+        return render_template("type/list/editions.html", lst, editions)
 
 class list_editions_json(delegate.page):
     path = "(/people/\w+/lists/OL\d+L)/editions"
@@ -347,8 +348,8 @@ class list_editions_json(delegate.page):
     content_type = "application/json"
 
     def GET(self, key):
-        list = web.ctx.site.get(key)
-        if not list:
+        lst = web.ctx.site.get(key)
+        if not lst:
             raise web.notfound()
 
         i = web.input(limit=50, offset=0)
@@ -356,7 +357,7 @@ class list_editions_json(delegate.page):
         limit = h.safeint(i.limit, 50)
         offset = h.safeint(i.offset, 0)
 
-        editions = list.get_editions(limit=limit, offset=offset, _raw=True)
+        editions = lst.get_editions(limit=limit, offset=offset, _raw=True)
 
         data = make_collection(
             size=editions['count'],
@@ -399,14 +400,14 @@ class list_subjects_json(delegate.page):
     content_type = "application/json"
 
     def GET(self, key):
-        list = web.ctx.site.get(key)
-        if not list:
+        lst = web.ctx.site.get(key)
+        if not lst:
             raise web.notfound()
 
         i = web.input(limit=20)
         limit = h.safeint(i.limit, 20)
 
-        data = self.get_subjects(list, limit=limit)
+        data = self.get_subjects(lst, limit=limit)
         data['links'] = {
             "self": key + "/subjects",
             "list": key
@@ -415,8 +416,8 @@ class list_subjects_json(delegate.page):
         text = formats.dump(data, self.encoding)
         return delegate.RawText(text, content_type=self.content_type)
 
-    def get_subjects(self, list, limit):
-        data = list.get_subjects(limit=limit)
+    def get_subjects(self, lst, limit):
+        data = lst.get_subjects(limit=limit)
         for key, subjects in data.items():
             data[key] = [self._process_subject(s) for s in subjects]
         return dict(data)
@@ -450,35 +451,35 @@ class export(delegate.page):
     path = "(/people/\w+/lists/OL\d+L)/export"
 
     def GET(self, key):
-        list = web.ctx.site.get(key)
-        if not list:
+        lst = web.ctx.site.get(key)
+        if not lst:
             raise web.notfound()
 
         format = web.input(format="html").format
 
         if format == "html":
-            html = render_template("lists/export_as_html", list, self.get_editions(list))
+            html = render_template("lists/export_as_html", lst, self.get_editions(lst))
             return delegate.RawText(html)
         elif format == "bibtex":
-            html = render_template("lists/export_as_bibtex", list, self.get_editions(list))
+            html = render_template("lists/export_as_bibtex", lst, self.get_editions(lst))
             return delegate.RawText(html)
         elif format == "json":
-            data = {"editions": self.get_editions(list, raw=True)}
+            data = {"editions": self.get_editions(lst, raw=True)}
             web.header("Content-Type", "application/json")
             return delegate.RawText(formats.dump_json(data))
         elif format == "yaml":
-            data = {"editions": self.get_editions(list, raw=True)}
+            data = {"editions": self.get_editions(lst, raw=True)}
             web.header("Content-Type", "application/yaml")
             return delegate.RawText(formats.dump_yaml(data))
         else:
             raise web.notfound()
 
-    def get_editions(self, list, raw=False):
-        editions = sorted(list.get_all_editions(), key=lambda doc: doc['last_modified']['value'], reverse=True)
+    def get_editions(self, lst, raw=False):
+        editions = sorted(lst.get_all_editions(), key=lambda doc: doc['last_modified']['value'], reverse=True)
 
         if not raw:
             editions = [self.make_doc(e) for e in editions]
-            list.preload_authors(editions)
+            lst.preload_authors(editions)
         return editions
 
     def make_doc(self, rawdata):
@@ -489,21 +490,21 @@ class export(delegate.page):
 class feeds(delegate.page):
     path = "(/people/[^/]+/lists/OL\d+L)/feeds/(updates).(atom)"
 
-    def GET(self, key, name, format):
-        list = web.ctx.site.get(key)
-        if list is None:
+    def GET(self, key, name, fmt):
+        lst = web.ctx.site.get(key)
+        if lst is None:
             raise web.notfound()
-        text = getattr(self, 'GET_' + name + '_' + format)(list)
+        text = getattr(self, 'GET_' + name + '_' + fmt)(lst)
         return delegate.RawText(text)
 
-    def GET_updates_atom(self, list):
+    def GET_updates_atom(self, lst):
         web.header("Content-Type", 'application/atom+xml; charset="utf-8"')
-        return render_template("lists/feed_updates.xml", list)
+        return render_template("lists/feed_updates.xml", lst)
 
 def setup():
     pass
 
-def get_recently_modified_lists(limit, offset=0):
+def _get_recently_modified_lists(limit, offset=0):
     """Returns the most recently modified lists as list of dictionaries.
 
     This function is memoized for better performance.
@@ -516,9 +517,11 @@ def get_recently_modified_lists(limit, offset=0):
     keys = web.ctx.site.things({"type": "/type/list", "sort": "-last_modified", "limit": limit, "offset": offset})
     lists = web.ctx.site.get_many(keys)
 
-    return [list.dict() for list in lists]
+    return [lst.dict() for lst in lists]
 
-get_recently_modified_lists = cache.memcache_memoize(get_recently_modified_lists, key_prefix="get_recently_modified_lists", timeout=5*60)
+def get_cached_recently_modified_lists(limit, offset=0):
+    f = cache.memcache_memoize(_get_recently_modified_lists, key_prefix="lists.get_recently_modified_lists", timeout=0) # dateutil.HALF_HOUR_SECS)
+    return f(limit, offset=offset)
 
 def _preload_lists(lists):
     """Preloads all referenced documents for each list.
@@ -548,19 +551,15 @@ def get_randomized_list_seeds(lst_key):
     return seeds
 
 
-def seed_is_daisy_only(seed):
-    """Returns True if and only if the book is daisy only"""
-    ebook = seed.get_ebook_info()
-    return 'daisy_url' in ebook and 'borrow_url' not in ebook
+def _get_active_lists_in_random(limit=20, preload=True):
+    if 'env' not in web.ctx:
+        delegate.fakeload()
 
-
-@public
-def get_active_lists_in_random(limit=20, preload=True):
     lists = []
     offset = 0
 
     while len(lists) < limit:
-        result = get_recently_modified_lists(limit*5, offset=offset)
+        result = get_cached_recently_modified_lists(limit*5, offset=offset)
         if not result:
             break
 
@@ -574,6 +573,13 @@ def get_active_lists_in_random(limit=20, preload=True):
     if preload:
         _preload_lists(lists)
 
-    # convert rawdata into models.
-    lists = [web.ctx.site.new(xlist['key'], xlist) for xlist in lists]
     return lists
+
+@public
+def get_active_lists_in_random(limit=20, preload=True):
+    f = cache.memcache_memoize(
+        _get_active_lists_in_random,
+        key_prefix="lists.get_active_lists_in_random", timeout=0)
+    lists = f(limit=limit, preload=preload)
+    # convert rawdata into models.
+    return [web.ctx.site.new(xlist['key'], xlist) for xlist in lists]

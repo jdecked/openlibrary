@@ -7,6 +7,7 @@ $putctx("robots", "noindex,nofollow")
 
 <script type="text/javascript">
 <!--
+loadStyle("$static_url('build/js-books-edit.css')");
 \$().ready(Tabs);
 \$().ready(function(){
     if(jQuery.support.opacity){
@@ -90,50 +91,59 @@ function limitChars(textid, limit, infodiv) {
 </div>
 
 <script type="text/javascript">
-<!--
 \$(function() {
-    function update_visible() {
-        if (\$("#authors div.input").length > 1) {
-            \$("#authors a.remove").show();
-        }
-        else {
-            \$("#authors a.remove").hide();
-        }
-
-        \$("#authors a.add:not(:last)").hide();
-        \$("#authors a.add:last").show();
-    }
-
-    update_visible();
-
-    \$("#authors a.remove").live("click", function() {
-        if (\$("#authors div.input").length > 1) {
-            \$(this).closest("div.input").remove();
-            update_visible();
-        }
-    });
-
-    \$("#authors a.add").live("click", function(event) {
-        event.preventDefault();
-
-        var n = \$("#authors div.input:last").attr("id").substr("author-input-".length);
-        n = parseInt(n);
-
-        \$("#authors").append(render_author(n+1, {key:"", name: ""}));
-        \$("#authors input.author-autocomplete:last").author_autocomplete();
-        update_visible();
-    });
-
+    \$("#authors").setup_multi_input_autocomplete(
+        "input.author-autocomplete",
+        render_author,
+        {
+            endpoint: "/authors/_autocomplete",
+            // Don't render "Create new author" if searching by key
+            addnew: function(query) { return !/^OL\d+A/i.test(query); },
+        },
+        {
+            minChars: 2,
+            max: 11,
+            matchSubset: false,
+            autoFill: false,
+            formatItem: render_author_autocomplete_item
+        });
 });
-//-->
 </script>
 
+$jsdef render_author_autocomplete_item(item):
+    $if item.key == "__new__":
+        <div class="ac_author ac_addnew" title="Add a new author">
+            <span class="action">$_('Create a new record for') </span>
+            <span class="name">$item.name</span>
+        </div>
+    $else:
+        <div class="ac_author" title="Select this author">
+            <span class="name">
+                $item.name
+                $if item.birth_date or item.death_date:
+                    (${item.birth_date or ' '}&ndash;${item.death_date or ' '})
+            </span>
+            <span class="olid">$item.key.split('/')[2]</span>
+            &bull;
+            $if item.work_count == 0:
+                <span class="work">No books associated with $item.name</span>
+            $elif item.work_count == 1:
+                <span class="books">1 book</span>
+                <span class="work">titled <i>$item.works[0]</i></span>
+            $else:
+                <span class="books">$item.work_count books</span>
+                <span class="work">including <i>$item.works[0]</i></span>
+
+            $if item.subjects:
+                <span class="subject">Subjects: ${', '.join(item.subjects)}</span>
+        </div>
+
 $jsdef render_author(i, author):
-    <div class="input" id="author-input-$i">
+    <div class="input">
         <input name="authors--$i" class="author author-autocomplete" type="text" id="author-$i" value="$author.name"/>
         <input name="work--authors--$i--author--key" type="hidden" id="author-$i-key" value="$author.key" />
         <a href="javascript:;" class="remove red plain hidden" title="$_('Remove this author')">[x]</a>&nbsp;
-        <a href="javascript:;" class="add hidden">Add another author?</a>
+        <a href="javascript:;" class="add hidden">$_("Add another author?")</a>
     </div>
 
 <div id="contentBody">
@@ -142,13 +152,14 @@ $jsdef render_author(i, author):
     <div class="formElement title">
         <div class="TitleAuthor sansserif">
             <div class="label">
-                <label for="work-title">Title</label> <span class="tip">Use <b><i>Title: Subtitle</i></b> to add a subtitle.</span> <span class="red">*<span class="tip">$_("Required field")</span></span>
+                <label for="work-title">$_('Title')</label> <span class="tip">$:_("Use <b><i>Title: Subtitle</i></b> to add a subtitle.")</span> <span class="red">*<span class="tip">$_("Required field")</span></span>
             </div>
             <div class="input">
                 <input name="work--title" type="text" id="work-title" class="required" value="$this_title"/>
             </div>
             <div class="label">
-                <label for="author-$0">Author</label>
+                <label for="author-$0">$_('Author')</label>
+                <span class="tip">You can search by author name (like <em>j k rowling</em>) or by Open Library ID (like <a href="/authors/OL23919A" target="_blank"><em>OL23919A</em></a>).</span>
             </div>
             $ authors = work.authors and [a.author for a in work.authors]
             <div id="authors">
@@ -165,7 +176,7 @@ $jsdef render_author(i, author):
             <ul>
                 <li><a href="#about" id="link_about">$_("What's It About?")</a></li>
                 <li><a href="#excerpts" id="link_excerpts">$_("Add Excerpts")</a></li>
-                <li><a href="#web" id="link_web">$("Links")</a></li>
+                <li><a href="#web" id="link_web">$_("Links")</a></li>
                 $if edition:
                     $if edition.publishers:
                         $ edition_name = "; ".join(edition.publishers) + ' edition'
@@ -198,8 +209,7 @@ $jsdef render_author(i, author):
 
         $if recaptcha:
             <div class="formElement">
-                <div class="label">$_("Please type in the text in the image below.")</div>
-                $:recaptcha.render()
+                <div class="g-recaptcha" data-sitekey="$:recaptcha.public_key"></div>
             </div>
 
         $:macros.EditButtons(comment=work.comment_)

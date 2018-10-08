@@ -10,54 +10,92 @@ $def radiobuttons(name, options, value):
         <label for="$id">$v</label>
         &nbsp;&nbsp;
 
-$jsdef render_language(i, language):
-    <div class="input" id="languages-input-$i">
+$jsdef render_language_autocomplete_item(item):
+    <div class="ac_language" title="$_('Select this language')">
+        <span class="name">$item.name</span>
+    </div>
+
+$# Render the ith language input field
+$jsdef render_language_field(i, language):
+    <div class="input">
       <input name="languages--$i" class="language language-autocomplete" type="text" id="language-$i" value="$language.name" style="width:300px!important;"/>
       <input name="edition--languages--$i--key" type="hidden" id="language-$i-key" value="$language.key" />
       <a href="javascript:;" class="remove red plain hidden" title="$_('Remove this language')">[x]</a>
-      <br/><a href="javascript:;" class="add small librarian hidden">Add another language?</a>
+      <br/><a href="javascript:;" class="add small">Add another language?</a>
+    </div>
+
+$# Render the ith translated_from language input field
+$jsdef render_translated_from_language_field(i, language):
+    <div class="input">
+      <input type="text" name="translated_from--$i" class="language language-autocomplete" id="edition-translated_from-$i" value="$language.name" style="width:300px!important;"/>
+      <input type="hidden" name="edition--translated_from--$i--key"  id="edition-translated_from-$i-key" value="$language.key" />
+      <a href="javascript:;" class="remove red plain hidden" title="$_('Remove this language')">[x]</a>
+      $# Limit to only 1
+      $# <br/><a href="javascript:;" class="add small">Add another language?</a>
+    </div>
+
+
+$# Render the ith work input field
+$jsdef render_work_field(i, work):
+    <div class="input">
+        <input name="works--$i" class="work work-autocomplete" type="text" id="work-$i" value="$work.title"/>
+        <input name="edition--works--$i--key" type="hidden" id="work-$i-key" value="$work.key" />
+        <a href="javascript:;" class="remove red plain hidden" title="$_('Remove this work')">[x]</a>
+        $# Limit to only 1
+        $# <a href="javascript:;" class="add hidden">Add another work?</a>
+    </div>
+
+$jsdef render_work_autocomplete_item(item):
+    <div class="ac_work" title="Select this work">
+        <span class="name">
+            <span class="title">$item.name</span>
+            $if item.first_publish_year:
+            <span class="first_publish_year">($item.first_publish_year)</span>
+        </span>
+        <span class="olid">$item.key.split('/')[2]</span>
+        &bull;
+        $if item.edition_count == 1:
+            <span class="edition_count">$item.edition_count edition</span>
+        $else:
+            <span class="edition_count">$item.edition_count editions</span>
+        <span class="byline">
+            $if item.author_name:
+                by <span class="authors">${', '.join(item.author_name)}</span>
+        </span>
     </div>
 
 <script type="text/javascript">
-  <!--
-  \$(function() {
-      function update_visible() {
-          if (\$("#languages div.input").length > 1) {
-              \$("#languages a.remove").show();
-          }
-          else {
-              \$("#languages a.remove").hide();
-          }
+\$(function() {
+    \$("#languages").setup_multi_input_autocomplete(
+        "input.language-autocomplete",
+        render_language_field,
+        { endpoint: "/languages/_autocomplete" },
+        {
+            max: 6,
+            formatItem: render_language_autocomplete_item
+        });
 
-          $# The add link should be made visible only if both librarian-on and it is the last element.
-          \$("#languages a.add:not(:last)").attr("style", "display: none");
-          \$("#languages a.add:last").attr("style", "");
+    \$("#translated_from_languages").setup_multi_input_autocomplete(
+        "input.language-autocomplete",
+        render_translated_from_language_field,
+        { endpoint: "/languages/_autocomplete" },
+        {
+            max: 6,
+            formatItem: render_language_autocomplete_item
+        });
 
-          if (\$("#translated-from").hasClass("librarian-on")) {
-              \$("#languages a.add:last").addClass("librarian-on");
-          }
-      }
-      update_visible();
-
-     \$("#languages a.remove").live("click", function() {
-         if (\$("#languages div.input").length > 1) {
-             \$(this).closest("div.input").remove();
-             update_visible();
-         }
-     });
-
-     \$("#languages a.add").live("click", function(event) {
-         event.preventDefault();
-
-         var n = \$("#languages div.input:last").attr("id").substr("languages-input-".length);
-         n = parseInt(n);
-
-         \$("#languages").append(render_language(n+1, {key:"", name: ""}));
-         \$("#languages input.language-autocomplete:last").language_autocomplete();
-         update_visible();
-     });
-  });
-  -->
+    \$("#works").setup_multi_input_autocomplete(
+        "input.work-autocomplete",
+        render_work_field,
+        { endpoint: "/works/_autocomplete" },
+        {
+            minChars: 2,
+            max: 11,
+            matchSubset: false,
+            autoFill: false,
+            formatItem: render_work_autocomplete_item
+        });
+});
 </script>
 
 
@@ -93,7 +131,7 @@ $jsdef render_language(i, language):
         <div class="formElement">
             <div class="label">
                 <label for="edition-publish_places">$_("Where was the book published?")</label>
-                <span class="tip">$_("City, Country please.") $_("For example"): <i>New York, USA; Sydney, Australia</i></span>
+                <span class="tip">$_("City, Country please.") $_("For example:") <i>New York, USA; Sydney, Australia</i></span>
             </div>
             <div class="input">
                 <input type="text" name="edition--publish_places" id="edition-publish_places" value="$'; '.join(book.publish_places)"/>
@@ -120,29 +158,36 @@ $jsdef render_language(i, language):
                 <input type="text" name="edition--series--0" id="edition-series" value="$(book.series and book.series[0] or "")"/>
             </div>
         </div>
-
-        <!--
-        <div class="formElement librarian hidden">
-            <div class="label fixthis">
-                <label for="edition-collections">$_("Is it a volume in a collection?")</label>
-                <span class="tip">$_("What collection does it belong to?")</span>
-            </div>
-            <div class="input">
-                <input type="text" name="edition-collections-0" id="edition-collections" value=""/>
-                <div class="tip">$:_("i.e. <i>The <strong>Pocket Atlas of Anatomy</strong> collection consists of Vol I: Head and Neck, Vol. II: Thorax, Heart, Abdomen and Pelvis &amp; Vol. III: Spines Extremities and Joints</i>")</div>
-            </div>
-        </div>
-        -->
-
     </div>
 </fieldset>
 
 <fieldset class="major">
     <legend>$_("This Edition")</legend>
+
     <div class="formBack">
 
-    <div class="formBackLeft">
+        <div class="formElement librarian hidden">
+            <div class="label">
+                <label for="edition--works--$0">$_("What work is this an edition of?")</label>
+                <span class="tip">
+                    $_("Sometimes editions can be associated with the wrong work. You can correct that here.")
+                    $_("You can search by title or by Open Library ID")
+                    ($("like")
+                    <a href="/works/OL262757W" target="_blank"><em>OL262757W</em></a>).
+                    <br/>
+                    $:_("WARNING: Any edits made to the work from this page will be applied to the <b>old work</b>.")
+                </span>
+            </div>
+            <div id="works">
+                $if book.works:
+                    $for i, work in enumerate(book.works):
+                        $:render_work_field(i, work)
+                $else:
+                    $:render_work_field(0, storage(title="", key=""))
+            </div>
+        </div>
 
+    <div class="formBackLeft">
         <div class="formElement">
             <div class="label">
                 <label for="edition-title">Title</label>
@@ -155,7 +200,9 @@ $jsdef render_language(i, language):
         </div>
 
         <div class="formElement">
-            <div class="label"><label for="edition-subtitle">$_("Subtitle")</label> <span class="tip">$:_("Usually distinguished by different or smaller type. For example: <i>envisioning the next 50 years</i>")</span></div>
+            <div class="label"><label for="edition-subtitle">$_("Subtitle")</label>
+                <span class="tip">$_("Usually distinguished by different or smaller type.") $_("For example:") <i>envisioning the next 50 years</i></span>
+            </div>
             <div class="input">
                 <input type="text" name="edition--subtitle" id="edition-subtitle" value="$book.subtitle" style="width:650px;"/>
             </div>
@@ -186,7 +233,7 @@ $jsdef render_language(i, language):
             </div>
             <div class="input">
                 <input type="text" name="edition--other_titles--0" id="edition-title_other" value="$(book.other_titles and book.other_titles[0])" style="width:620px!important;"/>
-                <div class="tip">$_("For example:") $:_("<i>Der Zauberberg</i> is an alternate title for <i>The Magic Mountain</i>.")</div>
+                <div class="tip">$_("For example:") <i>Der Zauberberg</i> $_("is an alternate title for") <i>The Magic Mountain</i>.</div>
             </div>
             $if book.other_titles and len(book.other_titles) > 1:
                 $for i, t in enumerate(book.other_titles):
@@ -314,9 +361,9 @@ $jsdef render_language(i, language):
                 </div>
                 $if book.languages:
                     $for i, lang in enumerate(book.languages):
-                        $:render_language(i, lang)
+                        $:render_language_field(i, lang)
                 $else:
-                    $:render_language(0, storage(name="", key=""))
+                    $:render_language_field(0, storage(name="", key=""))
             </div>
 
             <div class="formElement librarian hidden" id="translated-from">
@@ -351,14 +398,15 @@ $jsdef render_language(i, language):
                     </div>
                 </div>
 
-                <div class="$trans_class">
+                <div class="$trans_class" id="translated_from_languages">
                     <div class="label">
                         <label for="edition-translated_from"><span class="tip">$_("What language was the original written in?")</span></label>
                     </div>
-                    <div class="input">
-                        <input type="text" name="translated_from" id="edition-translated_from" class="language-autocomplete" value="$(book.translated_from and book.translated_from[0].name)" style="width:300px!important;"/>
-                        <input type="hidden" name="edition--translated_from--0--key" id="edition-translated_from-key" value="$(book.translated_from and book.translated_from[0].key)"/>
-                    </div>
+                    $if book.translated_from:
+                        $for i, lang in enumerate(book.translated_from):
+                            $:render_translated_from_language_field(i, lang)
+                    $else:
+                        $:render_translated_from_language_field(0, storage(name="", key=""))
                 </div>
 
             </div>
@@ -659,9 +707,18 @@ $if ctx.user and ctx.user.is_admin():
                 if (data.name == "" || data.name == "---") {
                     return error("#id-errors", "select-id", "$_('Please select an identifier.')")
                 }
+                var label = \$("#select-id").find("option[value=" + data.name + "]").html();
                 if (data.value == "") {
-                    var label = \$("#select-id").find("option[value=" + data.name + "]").html();
                     return error("#id-errors", "id-value", "$_('You need to give a value to ID.')".replace(/ID/, label));
+                }
+                if (['ocaid'].includes(data.name) && /\s/g.test(data.value)) {
+                    return error("#id-errors", "id-value", "$_('ID ids cannot contain whitespace.')".replace(/ID/, label));
+                }
+                if (data.name == "isbn_10" && data.value.length != 10) {
+                    return error("#id-errors", "id-value", "$_('ID must be exactly 10 characters [0-9] or X.')".replace(/ID/, label));
+                }
+                if (data.name == "isbn_13" && data.value.length != 13) {
+                    return error("#id-errors", "id-value", "$_('ID must be exactly 13 digits [0-9].')".replace(/ID/, label));
                 }
                 \$("id-errors").hide();
                 return true;

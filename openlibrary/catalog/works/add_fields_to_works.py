@@ -45,7 +45,7 @@ def dates():
             continue
         first = min(years.keys())
         assert first != 0
-        print w['key'], `w['title']`, first
+        print(w['key'], repr(w['title']), first)
         q = {
             'key': w['key'],
             f: { 'connect': 'update', 'value': str(first)}
@@ -79,7 +79,7 @@ def lang():
         first = lang[0]
         if any(l != first for l in lang):
             continue
-        print w['key'], `w['title']`, first, len(lang)
+        print(w['key'], repr(w['title']), first, len(lang))
         q = {
             'key': w['key'],
             f: { 'connect': 'update_list', 'value': [first]}
@@ -127,7 +127,7 @@ def add_fields():
                     continue
                 if f == 'genres':
                     found_list = [[g.strip('.') for g in e[f]] for e in editions \
-                        if e.get(f, None) and not any('ranslation' in i for i in e[f])]
+                        if e.get(f, None) and not any('translation' in i for i in e[f])]
                 if f == 'table_of_contents':
                     found_list = []
                     for e in query_iter(q):

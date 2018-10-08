@@ -10,7 +10,7 @@ from openlibrary.catalog.utils import error_mail
 from openlibrary.catalog.utils.query import query, withKey
 from openlibrary.catalog.importer.merge import try_merge
 from openlibrary.catalog.importer.update import add_source_records
-from openlibrary.catalog.get_ia import get_ia, urlopen_keep_trying, NoMARCXML, bad_ia_xml, marc_formats, get_marc_ia, get_marc_ia_data
+from openlibrary.catalog.get_ia import get_ia, urlopen_keep_trying, NoMARCXML, bad_ia_xml, marc_formats, get_marc_ia_data
 from openlibrary.catalog.title_page_img.load import add_cover_image
 from openlibrary.solr.update_work import update_work, solr_update
 #from openlibrary.catalog.works.find_works import find_title_redirects, find_works, get_books, books_query, update_works
@@ -246,7 +246,7 @@ def hide_books(start):
             collections = set(i.lower().strip() for i in row.collection.split(';'))
             if ignore_noindex & collections:
                 continue
-        print `ia`, row.updated
+        print(repr(ia), row.updated)
         for eq in query({'type': '/type/edition', 'ocaid': ia}):
             print eq['key']
             e = ol.get(eq['key'])
@@ -254,7 +254,7 @@ def hide_books(start):
                 continue
             if 'works' in e:
                 fix_works.update(e['works'])
-            print e['key'], `e.get('title', None)`
+            print(e['key'], repr(e.get('title', None)))
             del e['ocaid']
             mend.append(e)
         last_updated = row.updated
@@ -293,7 +293,7 @@ def bad_marc_alert(bad_marc):
     msg = '\n'.join((
         'http://www.archive.org/details/%s\n' +
         'http://www.archive.org/download/%s\n\n' +
-        '%s\n\n') % (ia, ia, `data`) for ia, data in bad_marc)
+        '%s\n\n') % (ia, ia, repr(data)) for ia, data in bad_marc)
     error_mail(msg_from, msg_to, subject, msg)
 
 if __name__ == '__main__':
@@ -357,7 +357,7 @@ if __name__ == '__main__':
             if 'passengerlistsof' in ia:
                 print 'skip passenger lists', ia
                 continue
-            print `ia`, row.updated
+            print(repr(ia), row.updated)
             when = str(row.updated)
             if query({'type': '/type/edition', 'ocaid': ia}):
                 print 'already loaded'

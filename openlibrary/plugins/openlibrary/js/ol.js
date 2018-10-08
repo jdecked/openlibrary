@@ -1,3 +1,5 @@
+var startTime = new Date(); // This is used by ol.analytics.js
+
 var Browser = {
     getUrlParameter: function(key) {
         var query = window.location.search.substring(1);
@@ -24,7 +26,7 @@ var Browser = {
 
     change_url: function(query) {
         var getUrl = window.location;
-        var baseUrl = getUrl .protocol + "//" + getUrl.host +
+        var baseUrl = getUrl.protocol + "//" + getUrl.host +
             "/" + getUrl.pathname.split('/')[1];
         window.history.pushState({
             "html": document.html,
@@ -56,13 +58,6 @@ var Browser = {
     }
 }
 
-
-
-function linkbuttons() {
-    $(".linkButton").click(function(){
-        window.location = $(this).attr("name");
-    });
-};
 function twitterOn() {
     if ($(".twitter").is(":checked")) {$("#twitterName").show();} else {$("#twitterName").hide();};
     $("input[type=radio]").click(function(){
@@ -72,76 +67,17 @@ function twitterOn() {
 function isScrolledIntoView(elem) {
     var docViewTop = $(window).scrollTop();
     var docViewBottom = docViewTop + $(window).height();
-    var elemTop = $(elem).offset().top;
-    var elemBottom = elemTop + $(elem).height();
-    return ((docViewTop < elemTop) && (docViewBottom > elemBottom));
+    if ($(elem).offset()) {
+        var elemTop = $(elem).offset().top;
+        var elemBottom = elemTop + $(elem).height();
+        return ((docViewTop < elemTop) && (docViewBottom > elemBottom));
+    }
+    return false;
 }
 $(window).scroll(function(){
   var scroller = $("#formScroll");
   if(isScrolledIntoView(scroller)){$("#scrollBtm").show();}else{$("#scrollBtm").hide();};
 })
-function setupSearch() {
-  $(".optionsNoScript").hide();
-  $(".optionsScript").show();
-
-    var A = $("#topOptions");
-    var B = A.parent().parent();
-    var C = B.find("a#searchHead");
-    var t1 = C.text();
-    var t2 = "Hide Advanced";
-    C.click(function(){
-        var D = $(this);
-        $('#footerSearch').toggle();
-        A.toggle();
-        B.toggleClass("darker");
-        D.toggleClass("attn");
-        D.toggleText(t1, t2);
-        B.mouseup(function(){
-            return false
-        });
-        $(document).mouseup(function(D){
-            if($(D.target).parent("a").length==0){
-                hideSearch()
-            };
-        });
-        function hideSearch(){
-            A.hide();
-            B.removeClass("darker");
-            C.removeClass("attn");
-            C.text(t1);
-        };
-    });
-    var E = $("#bottomOptions");
-    var F = E.parent().parent();
-    var G = F.find("a#searchFoot");
-    var t3 = G.text();
-    var t4 = "Hide Advanced";
-    G.click(function(){
-        var H = $(this);
-        E.toggle();
-        if($("#bottomOptions").is(":visible")){if($("#scrollBtm").is(":hidden")){$.scrollTo($("#formScroll"),800);};};
-        F.toggleClass("darker");
-        H.toggleClass("attn");
-        $("#footerSearch").toggleClass("onTop");
-        H.toggleText(t3, t4);
-        $("#btmSrchLabel").toggle();
-        F.mouseup(function(){
-            return false
-        });
-        $(document).mouseup(function(H){
-            if($(H.target).parent("a").length==0){
-                hideSearch()
-            };
-        });
-        function hideSearch(){
-            E.hide();
-            F.removeClass("darker");
-            G.removeClass("attn");
-            G.text(t3);
-        };
-    });
-
-};
 
 function flickrBuild(){$(".flickrs").flickr({callback:colorboxCallback});};
 function colorboxCallback(){$('a.flickrpic').colorbox({photo:true,preloading:true,opacity:'0.70'});};
@@ -426,13 +362,15 @@ $().ready(function(){
     var searchModeDefault = 'ebooks';
 
     // Maps search facet label with value
-    var defaultFacet = "title";
+    var defaultFacet = "all";
     var searchFacets = {
         'title': 'books',
         'author': 'authors',
+        'lists': 'lists',
         'subject': 'subjects',
         'all': 'all',
-        'advanced': 'advancedsearch'
+        'advanced': 'advancedsearch',
+        'text': 'inside'
     };
 
     var composeSearchUrl = function(q, json, limit, options) {
@@ -466,7 +404,7 @@ $().ready(function(){
 
         var url = composeSearchUrl(q, true, 10);
 
-        $('header .search-component ul.search-results').empty()
+        $('header#header-bar .search-component ul.search-results').empty()
         var facet = facet_value === 'all'? 'books' : facet_value;
         $.getJSON(url, function(data) {
             for (var d in data.docs) {
@@ -485,10 +423,11 @@ $().ready(function(){
         }
 
         localStorage.setItem("facet", facet_key);
-        $('header .search-facet-selector select').val(capitalize(facet_key))
-        $('header .search-facet-value').html(capitalize(facet_key));
-        $('header .search-component ul.search-results').empty()
-        q = $('header .search-component .search-bar-input input').val();
+        $('header#header-bar .search-facet-selector select').val(facet_key)
+        text = $('header#header-bar .search-facet-selector select').find('option:selected').text()
+        $('header#header-bar .search-facet-value').html(text);
+        $('header#header-bar .search-component ul.search-results').empty()
+        q = $('header#header-bar .search-component .search-bar-input input').val();
         var url = composeSearchUrl(q)
         $('.search-bar-input').attr("action", url);
         renderInstantSearchResults(q);
@@ -503,10 +442,13 @@ $().ready(function(){
         $("input[name='has_fulltext']").remove();
 
         var url = $(form).attr('action')
+        url = Browser.removeURLParameter(url, 'm');
         url = Browser.removeURLParameter(url, 'has_fulltext');
         url = Browser.removeURLParameter(url, 'subject_facet');
 
         if (localStorage.getItem('mode') !== 'everything') {
+            $(form).append('<input type="hidden" name="m" value="edit"/>');
+            url = url + (url.indexOf('?') > -1 ? '&' : '?')  + 'm=edit';
             $(form).append('<input type="hidden" name="has_fulltext" value="true"/>');
             url = url + (url.indexOf('?') > -1 ? '&' : '?')  + 'has_fulltext=true';
         } if (localStorage.getItem('mode') === 'printdisabled') {
@@ -586,38 +528,38 @@ $().ready(function(){
         if($(this).width() < 568){
             if (!enteredSearchMinimized) {
                 $('.search-bar-input').addClass('trigger')
-                $('header .search-component ul.search-results').empty()
+                $('header#header-bar .search-component ul.search-results').empty()
             }
             enteredSearchMinimized = true;
         } else {
             if (enteredSearchMinimized) {
                 $('.search-bar-input').removeClass('trigger');
-                var search_query = $('header .search-component .search-bar-input input').val()
+                var search_query = $('header#header-bar .search-component .search-bar-input input').val()
                 if (search_query) {
                     renderInstantSearchResults(search_query);
                 }
             }
             enteredSearchMinimized = false;
             searchExpansionActivated = false;
-            $('header .logo-component').removeClass('hidden');
-            $('header .search-component').removeClass('search-component-expand');
+            $('header#header-bar .logo-component').removeClass('hidden');
+            $('header#header-bar .search-component').removeClass('search-component-expand');
         }
     });
 
     var toggleSearchbar = function() {
         searchExpansionActivated = !searchExpansionActivated;
         if (searchExpansionActivated) {
-            $('header .logo-component').addClass('hidden');
-            $('header .search-component').addClass('search-component-expand');
+            $('header#header-bar .logo-component').addClass('hidden');
+            $('header#header-bar .search-component').addClass('search-component-expand');
             $('.search-bar-input').removeClass('trigger')
         } else {
-            $('header .logo-component').removeClass('hidden');
-            $('header .search-component').removeClass('search-component-expand');
+            $('header#header-bar .logo-component').removeClass('hidden');
+            $('header#header-bar .search-component').removeClass('search-component-expand');
             $('.search-bar-input').addClass('trigger')
         }
     }
 
-    $('header .search-facet-selector select').change(function(e) {
+    $('header#header-bar .search-facet-selector select').change(function(e) {
         var facet = $('header .search-facet-selector select').val();
         if (facet.toLowerCase() === 'advanced') {
             e.preventDefault(e);
@@ -628,7 +570,7 @@ $().ready(function(){
     var renderInstantSearchResult = {
         books: function(work) {
             var author_name = work.author_name ? work.author_name[0] : '';
-            $('header .search-component ul.search-results').append(
+            $('header#header-bar .search-component ul.search-results').append(
                 '<li class="instant-result"><a href="' + work.key + '"><img src="' + cover_url(work.cover_i) +
                     '"/><span class="book-desc"><div class="book-title">' +
                     work.title + '</div>by <span class="book-author">' +
@@ -637,7 +579,7 @@ $().ready(function(){
         },
         authors: function(author) {
             // Todo: default author img to: https://dev.openlibrary.org/images/icons/avatar_author-lg.png
-            $('header .search-component ul.search-results').append(
+            $('header#header-bar .search-component ul.search-results').append(
                 '<li><a href="/authors/' + author.key + '"><img src="' + ("http://covers.openlibrary.org/a/olid/" + author.key + "-S.jpg") + '"/><span class="author-desc"><div class="author-name">' +
                     author.name + '</div></span></a></li>'
             );
@@ -645,10 +587,10 @@ $().ready(function(){
     }
 
     $('form.search-bar-input').submit(function(e) {
-        q = $('header .search-component .search-bar-input input').val();
+        q = $('header#header-bar .search-component .search-bar-input input').val();
         var facet_value = searchFacets[localStorage.getItem("facet")];
         if (facet_value === 'books') {
-            $('header .search-component .search-bar-input input[type=text]').val(marshalBookSearchQuery(q));
+            $('header#header-bar .search-component .search-bar-input input[type=text]').val(marshalBookSearchQuery(q));
         }
         setMode('.search-bar-input');
     });
@@ -677,11 +619,11 @@ $().ready(function(){
         $(this).css('cursor', 'wait');
     });
 
-    $('header .search-component .search-results li a').live('click', debounce(function(event) {
+    $('header#header-bar .search-component .search-results li a').live('click', debounce(function(event) {
         $(document.body).css({'cursor' : 'wait'});
     }, 300, false));
 
-    $('header .search-component .search-bar-input input').keyup(debounce(function(e) {
+    $('header#header-bar .search-component .search-bar-input input').keyup(debounce(function(e) {
         // ignore directional keys and enter for callback
         if (![13,37,38,39,40].includes(e.keyCode)){
             renderInstantSearchResults($(this).val());
@@ -689,50 +631,52 @@ $().ready(function(){
     }, 500, false));
 
     $(document).click(debounce(function(event) {
-        if(!$(event.target).closest('header .search-component').length) {
-            $('header .search-component ul.search-results').empty();
+        if(!$(event.target).closest('header#header-bar .search-component').length) {
+            $('header#header-bar .search-component ul.search-results').empty();
         }
-        if(!$(event.target).closest('header .navigation-component .browse-menu').length) {
-            $('header .navigation-component .browse-menu .browse-menu-options').hide();
+        if(!$(event.target).closest('header#header-bar .navigation-component .browse-menu').length) {
+            $('header#header-bar .navigation-component .browse-menu .browse-menu-options').hide();
         }
-        if(!$(event.target).closest('header .navigation-component .my-books-menu').length) {
-            $('header .navigation-component .my-books-menu .my-books-menu-options').hide();
+        if(!$(event.target).closest('header#header-bar .navigation-component .my-books-menu').length) {
+            $('header#header-bar .navigation-component .my-books-menu .my-books-menu-options').hide();
         }
-        if(!$(event.target).closest('header .navigation-component .more-menu').length) {
-            $('header .navigation-component .more-menu .more-menu-options').hide();
+        if(!$(event.target).closest('header#header-bar .navigation-component .more-menu').length) {
+            $('header#header-bar .navigation-component .more-menu .more-menu-options').hide();
         }
-        if(!$(event.target).closest('header .hamburger-component .hamburger-button').length) {
-            $('header .hamburger-dropdown-component').hide();
+        if(!$(event.target).closest('header#header-bar .hamburger-component .hamburger-button').length) {
+            $('header#header-bar .hamburger-dropdown-component').hide();
         }
+
         if(!$(event.target).closest('.dropclick').length) {
-            $('.dropclick').next('.dropdown').slideUp();
+            $('.dropclick').parent().next('.dropdown').slideUp(25);
+            $('.dropclick').next('.dropdown').slideUp(25);
             $('.dropclick').parent().find('.arrow').removeClass("up");
         }
-    }, 300, false));
+    }, 100, false));
 
-    $('header .search-component .search-bar-input input').focus(debounce(function() {
+    $('header#header-bar .search-component .search-bar-input input').focus(debounce(function() {
         var val = $(this).val();
         renderInstantSearchResults(val);
     }, 300, false));
 
     /* Browse menu */
-    $('header .navigation-component .browse-menu').click(debounce(function() {
-        $('header .navigation-component .browse-menu-options').toggle();
+    $('header#header-bar .navigation-component .browse-menu').click(debounce(function() {
+        $('header#header-bar .navigation-component .browse-menu-options').toggle();
     }, 300, false));
 
     /* My Books menu */
-    $('header .navigation-component .my-books-menu').click(debounce(function() {
-        $('header .navigation-component .my-books-menu-options').toggle();
+    $('header#header-bar .navigation-component .my-books-menu').click(debounce(function() {
+        $('header#header-bar .navigation-component .my-books-menu-options').toggle();
     }, 300, false));
 
     /* More menu */
-    $('header .navigation-component .more-menu').click(debounce(function() {
-        $('header .navigation-component .more-menu-options').toggle();
+    $('header#header-bar .navigation-component .more-menu').click(debounce(function() {
+        $('header#header-bar .navigation-component .more-menu-options').toggle();
     }, 300, false));
 
     /* Hamburger menu */
-    $('header .hamburger-component .hamburger-button').live('click', debounce(function() {
-        $('header .hamburger-dropdown-component').toggle();
+    $('header#header-bar .hamburger-component .hamburger-button').live('click', debounce(function() {
+        $('header#header-bar .hamburger-dropdown-component').toggle();
     }, 300, false));
 
     $('textarea.markdown').focus(function(){
@@ -741,17 +685,23 @@ $().ready(function(){
             $('.wmd-preview').before('<h3 id="prevHead" style="margin:15px 0 10px;padding:0;">Preview</h3>');
         }
     });
-    $('.dropclick').click(debounce(function(){
-        $(this).next('.dropdown').slideToggle();
+    $('.dropclick').live('click', debounce(function(){
+        $(this).next('.dropdown').slideToggle(25);
+        $(this).parent().next('.dropdown').slideToggle(25);
         $(this).parent().find('.arrow').toggleClass("up");
+    }, 300, false));
+
+    $('a.add-to-list').live('click', debounce(function(){
+        $(this).closest('.dropdown').slideToggle(25);
+        $(this).closest('.arrow').toggleClass("up");
     }, 300, false));
 
     function hideUser(){
         $('#main-account-dropdown').slideUp(25);
-        $('header .dropdown-avatar').removeClass('hover');
+        $('header#header-bar .dropdown-avatar').removeClass('hover');
     };
 
-    $('header .dropdown-avatar').click(debounce(function() {
+    $('header#header-bar .dropdown-avatar').click(debounce(function() {
         var dropdown = $('#main-account-dropdown');
         if (dropdown.is(':visible') === true) {
             hideUser();
@@ -766,6 +716,40 @@ $().ready(function(){
             });
 
         }
-    }, 300, false));
+    }, 100, false));
+
+    var readStatuses = ["Remove", 'Want to Read', 'Currently Reading', 'Already Read'];
+    var buildReadingLogCombo = function(status_id) {
+        var template = function(shelf_id, checked, remove) {
+            return '<option value="' + shelf_id + '">' + (checked? '<span class="activated-check">✓</span> ': '') + readStatuses[remove? 0: shelf_id] + '</option>';
+        }
+        return (status_id == 3)? (template(3, true) + template(1) + template(2) + template(3, false, true)) :
+            (status_id == 2)? (template(2, true) + template(1) + template(3) + template(2, false, true)) :
+            (template(1, true) + template(2) + template(3) + template(1, false, true));
+    }
+
+    $('.reading-log-lite select').change(function(e) {
+        var self = this;
+        var form = $(self).closest("form");
+        var option = $(self).val();
+        var remove = $(self).children("option").filter(':selected').text().toLowerCase() === "remove";
+        var url = $(form).attr('action');
+        $.ajax({
+            'url': url,
+            'type': "POST",
+            'data': {
+                bookshelf_id: $(self).val()
+            },
+            'datatype': 'json',
+            success: function(data) {
+                if (remove) {
+                    $(self).closest('.searchResultItem').remove();
+                } else {
+                    location.reload();
+                }
+            }
+        });
+        e.preventDefault();
+    });
 });
 jQuery.fn.exists = function(){return jQuery(this).length>0;}

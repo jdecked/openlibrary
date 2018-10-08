@@ -411,16 +411,21 @@ class Edition(models.Edition):
         Builds a wikipedia citation as defined by http://en.wikipedia.org/wiki/Template:Cite#Citing_books
         """
         result = {
-            "title": self.works[0].title.replace("[", "&#91").replace("]", "&#93"),
+            "title": self.title.replace("[", "&#91").replace("]", "&#93"),
             "publication-date": self.get('publish_date'),
-            "url": "http://openlibrary.org%s" % self.url()
+            "ol": str(self.get_olid())[2:]
         }
 
-        if self.title != self.works[0].title:
-            result['edition'] = self.title
+        if self.ocaid:
+            result['url'] = "https://archive.org/details/"+self.ocaid
+
+        if self.lccn:
+            result['lccn'] = self.lccn[0]
+
+        if self.issn:
+            result['issn'] = self.issn[0]
 
         if self.get('isbn_10'):
-            result['id'] = self['isbn_10'][0]
             result['isbn'] = self['isbn_13'][0] if self.get('isbn_13') else self['isbn_10'][0]
 
         if self.get('oclc_numbers'):
@@ -485,11 +490,8 @@ class Author(models.Author):
 
 re_year = re.compile(r'(\d{4})$')
 
-def get_works_solr():
-    if config.get("single_core_solr"):
-        base_url = "http://%s/solr" % config.plugin_worksearch.get('solr')
-    else:
-        base_url = "http://%s/solr/works" % config.plugin_worksearch.get('solr')
+def get_solr():
+    base_url = "http://%s/solr" % config.plugin_worksearch.get('solr')
     return Solr(base_url)
 
 class Work(models.Work):
@@ -521,19 +523,14 @@ class Work(models.Work):
         return []
 
     def _get_solr_data(self):
-        if config.get("single_core_solr"):
-            key = self.key
-        else:
-            key = self.get_olid()
-
         fields = [
             "cover_edition_key", "cover_id", "edition_key", "first_publish_year",
             "has_fulltext", "lending_edition_s", "checked_out", "public_scan_b", "ia"]
 
-        solr = get_works_solr()
-        stats.begin("solr", query={"key": key}, fields=fields)
+        solr = get_solr()
+        stats.begin("solr", query={"key": self.key}, fields=fields)
         try:
-            d = solr.select({"key": key}, fields=fields)
+            d = solr.select({"key": self.key}, fields=fields)
         except Exception as e:
             logging.getLogger("openlibrary").exception("Failed to get solr data")
             return None
@@ -559,6 +556,15 @@ class Work(models.Work):
         cover = self.get_cover(use_solr=use_solr)
         return cover and cover.url(size)
 
+    def get_author_names(self, blacklist=None):
+        author_names = []
+        for author in self.get_authors():
+            author_name = (author if isinstance(author, basestring)
+                           else author.name)
+            if not blacklist or author_name.lower() not in blacklist:
+                author_names.append(author_name)
+        return author_names
+
     def get_authors(self):
         authors =  [a.author for a in self.authors]
         authors = [follow_redirect(a) for a in authors]
@@ -579,18 +585,52 @@ class Work(models.Work):
             subjects = [flip(s.name) for s in subjects]
         return subjects
 
+    @staticmethod
+    def filter_problematic_subjects(subjects, filter_unicode=True):
+        blacklist = ['accessible_book', 'protected_daisy',
+                     'in_library', 'overdrive', 'large_type_books',
+                     'internet_archive_wishlist', 'fiction',
+                     'popular_print_disabled_books',
+                     'fiction_in_english', 'open_library_staff_picks',
+                     'inlibrary', 'printdisabled', 'browserlending',
+                     'biographies', 'open_syllabus_project', 'history',
+                     'long_now_manual_for_civilization', 'Popular works']
+        blacklist_chars = ['(', ',', '\'', ':', '&', '-', '.']
+        ok_subjects = []
+        for subject in subjects:
+            _subject = subject.lower().replace(' ', '_')
+            subject = subject.replace('_', ' ')
+            if (_subject not in blacklist and
+                (not filter_unicode or (
+                    subject.replace(' ', '').isalnum() and 
+                    type(subject) is not unicode)) and
+                all([char not in subject for char in blacklist_chars])):
+                ok_subjects.append(subject)
+        return ok_subjects        
+
+    def get_related_books_subjects(self, filter_unicode=True):
+        return self.filter_problematic_subjects(self.get_subjects())
+
     def get_sorted_editions(self):
         """Return a list of works sorted by publish date"""
         w = self._solr_data
-        editions = w and w.get('edition_key') or []
+        editions = w.get('edition_key') if w else []
 
         # solr is stale
-        if len(editions) < self.edition_count:
+        if len(editions) != self.edition_count:
             q = {"type": "/type/edition", "works": self.key, "limit": 10000}
             editions = [k[len("/books/"):] for k in web.ctx.site.things(q)]
 
         if editions:
-            return web.ctx.site.get_many(["/books/" + olid for olid in editions])
+            books = web.ctx.site.get_many(["/books/" + olid for olid in editions])
+
+            availability = lending.get_availability_of_ocaids([
+                book.ocaid for book in books if book.ocaid
+            ])
+
+            for book in books:
+                book.availability = availability.get(book.ocaid) or {"status": "error"}
+            return books[::-1]
         else:
             return []
 
@@ -686,6 +726,10 @@ class User(models.User):
     def get_edit_history(self, limit=10, offset=0):
         return web.ctx.site.versions({"author": self.key, "limit": limit, "offset": offset})
 
+    def get_users_settings(self):
+        settings = web.ctx.site.get('%s/preferences' % self.key)
+        return settings.dict().get('notifications') if settings else {}
+
     def get_creation_info(self):
         if web.ctx.path.startswith("/admin"):
             d = web.ctx.site.versions({'key': self.key, "sort": "-created", "limit": 1})[0]
@@ -744,8 +788,6 @@ class Changeset(client.Changeset):
             }
         else:
             d = web.ctx.site.get(key, revision).dict()
-            if d['type']['key'] == '/type/edition':
-                d.pop('authors', None)
             return d
 
     def process_docs_before_undo(self, docs):
@@ -796,17 +838,6 @@ class NewAccountChangeset(Changeset):
 class MergeAuthors(Changeset):
     def can_undo(self):
         return self.get_undo_changeset() is None
-
-    def process_docs_before_undo(self, docs):
-        works = [doc for doc in docs if doc['key'].startswith("/works/")]
-        for w in works:
-            if w.get("authors"):
-                authors = [follow_redirect(web.ctx.site.get(a['author']['key']))
-                            for a in w.get('authors')
-                            if 'author' in a
-                            and 'key' in a['author']]
-                w['authors'] = [{"author": {"key": a.key}} for a in authors]
-        return docs
 
     def get_master(self):
         master = self.data.get("master")
